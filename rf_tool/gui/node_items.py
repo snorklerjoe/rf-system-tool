@@ -159,6 +159,14 @@ class BlockItem(QGraphicsObject):
             pi.setPos(self.BLOCK_W, y)
             self._port_items.append(pi)
 
+    def rebuild_ports(self) -> None:
+        for pi in self._port_items:
+            pi.setParentItem(None)
+            if pi.scene():
+                pi.scene().removeItem(pi)
+        self._port_items = []
+        self._create_port_items()
+
     def get_port_item(self, port_name: str) -> Optional[PortItem]:
         for pi in self._port_items:
             if pi.port.name == port_name:
@@ -199,6 +207,17 @@ class BlockItem(QGraphicsObject):
             painter.setPen(QPen(QColor("#AAAACC"), 1.2))
 
         self.paint_shape(painter)
+
+        if self.block.comment_mode != "active":
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(QColor(90, 90, 90, 140)))
+            painter.drawRoundedRect(self.boundingRect(), 6, 6)
+            painter.setPen(QPen(QColor("#FF3333"), 3.0))
+            if self.block.comment_mode == "out":
+                painter.drawLine(QPointF(6, 6), QPointF(self.BLOCK_W - 6, self.BLOCK_H - 6))
+                painter.drawLine(QPointF(self.BLOCK_W - 6, 6), QPointF(6, self.BLOCK_H - 6))
+            elif self.block.comment_mode == "through":
+                painter.drawLine(QPointF(6, self.BLOCK_H / 2), QPointF(self.BLOCK_W - 6, self.BLOCK_H / 2))
 
     def paint_shape(self, painter: QPainter) -> None:
         """Subclasses override this to draw their schematic symbol."""
@@ -557,15 +576,22 @@ class SinkItem(BlockItem):
 
     def paint_shape(self, painter: QPainter) -> None:
         w, h = self.BLOCK_W, self.BLOCK_H
-        cx, cy = w / 2, h / 2
-        r = min(w, h) * 0.42
         painter.setBrush(QBrush(QColor(self.block.color)))
-        painter.drawEllipse(QPointF(cx, cy), r, r)
+        painter.drawRoundedRect(QRectF(8, 18, w - 16, h - 36), 5, 5)
         painter.setPen(QPen(Qt.white, 1.5))
-        # Ground symbol
-        painter.drawLine(QPointF(cx - r * 0.5, cy), QPointF(cx + r * 0.5, cy))
-        painter.drawLine(QPointF(cx - r * 0.3, cy + r * 0.3), QPointF(cx + r * 0.3, cy + r * 0.3))
-        painter.drawLine(QPointF(cx - r * 0.1, cy + r * 0.6), QPointF(cx + r * 0.1, cy + r * 0.6))
+        lead_y = h / 2
+        painter.drawLine(QPointF(0, lead_y), QPointF(8, lead_y))
+        painter.drawLine(QPointF(w - 8, lead_y), QPointF(w, lead_y))
+        zig = [
+            QPointF(12, lead_y), QPointF(18, lead_y - 8), QPointF(24, lead_y + 8),
+            QPointF(30, lead_y - 8), QPointF(36, lead_y + 8), QPointF(42, lead_y - 8),
+            QPointF(48, lead_y + 8), QPointF(54, lead_y - 8),
+        ]
+        path = QPainterPath()
+        path.moveTo(zig[0])
+        for p in zig[1:]:
+            path.lineTo(p)
+        painter.drawPath(path)
 
     def mouseDoubleClickEvent(self, event):
         """Double-click opens the spectrum viewer."""
@@ -625,6 +651,7 @@ _ITEM_MAP = {
     "LowPassFilter":  LPFItem,
     "HighPassFilter": HPFItem,
     "PowerSplitter":  SplitterItem,
+    "PowerCombiner":  SplitterItem,
     "Switch":         SwitchItem,
     "Source":         SourceItem,
     "Sink":           SinkItem,

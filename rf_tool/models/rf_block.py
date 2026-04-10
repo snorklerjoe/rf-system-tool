@@ -78,6 +78,7 @@ class RFBlock:
         min_input_power_dbm: Optional[float] = None,
         max_input_power_dbm: Optional[float] = None,
         spur_coefficients: Optional[List[Dict]] = None,
+        comment_mode: str = "active",
     ) -> None:
         self.block_id: str = block_id or str(uuid.uuid4())
         self.label: str = label
@@ -99,6 +100,7 @@ class RFBlock:
 
         # Spurious generation
         self.spur_coefficients: List[Dict] = spur_coefficients or []
+        self.comment_mode: str = comment_mode if comment_mode in {"active", "out", "through"} else "active"
 
         # Ports are defined by subclasses
         self._input_ports: List[Port] = []
@@ -211,6 +213,7 @@ class RFBlock:
             "min_input_power_dbm": self.min_input_power_dbm,
             "max_input_power_dbm": self.max_input_power_dbm,
             "spur_coefficients": self.spur_coefficients,
+            "comment_mode": self.comment_mode,
         }
 
     @classmethod
@@ -228,6 +231,7 @@ class RFBlock:
             min_input_power_dbm=d.get("min_input_power_dbm"),
             max_input_power_dbm=d.get("max_input_power_dbm"),
             spur_coefficients=d.get("spur_coefficients", []),
+            comment_mode=d.get("comment_mode", "active"),
         )
 
     def __repr__(self) -> str:

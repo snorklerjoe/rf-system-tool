@@ -10,14 +10,15 @@ Handles:
 """
 from __future__ import annotations
 
+import math
 from typing import Dict, List, Optional, Tuple
 
 from PySide6.QtWidgets import (
-    QGraphicsScene, QGraphicsView, QGraphicsLineItem,
-    QGraphicsPathItem, QMenu, QApplication,
+    QGraphicsScene, QGraphicsView,
+    QGraphicsPathItem, QGraphicsSimpleTextItem,
 )
 from PySide6.QtGui import QPen, QColor, QPainterPath, QBrush, QTransform
-from PySide6.QtCore import Qt, QPointF, QRectF, Signal, QObject
+from PySide6.QtCore import Qt, QPointF, Signal
 
 from rf_tool.models.rf_block import RFBlock
 from rf_tool.models.signal import Signal as RFSignal
@@ -43,6 +44,10 @@ class WireItem(QGraphicsPathItem):
         self.setPen(QPen(QColor("#00CCFF"), 2.0, Qt.SolidLine,
                          Qt.RoundCap, Qt.RoundJoin))
         self.setZValue(-1)
+        self.setFlag(self.ItemIsSelectable, True)
+        self._label = QGraphicsSimpleTextItem("-∞ dBm", self)
+        self._label.setBrush(QColor("#BBBBFF"))
+        self._label.setZValue(1)
         self.update_path()
 
     def update_path(self) -> None:
@@ -59,6 +64,15 @@ class WireItem(QGraphicsPathItem):
             p2,
         )
         self.setPath(path)
+        mid = path.pointAtPercent(0.5)
+        self._label.setPos(mid.x() + 6, mid.y() - 14)
+
+    def set_power_label(self, text: str, color: QColor) -> None:
+        self._label.setText(text)
+        self._label.setBrush(color)
+        font = self._label.font()
+        font.setBold(color == QColor("#FF3333"))
+        self._label.setFont(font)
 
 
 class TempWireItem(QGraphicsPathItem):
@@ -96,6 +110,7 @@ class RFScene(QGraphicsScene):
     connection_made = Signal(str, str, str, str)    # src_bid, src_port, dst_bid, dst_port
     connection_removed = Signal(str, str, str, str)
     block_selected = Signal(str)                     # block_id
+    block_double_clicked = Signal(str)
     scene_changed = Signal()
 
     def __init__(self, parent=None):
@@ -130,6 +145,7 @@ class RFScene(QGraphicsScene):
             port_item.connection_finished.connect(self._on_port_drag_end)
 
         item.block_clicked.connect(self.block_selected.emit)
+        item.block_double_clicked.connect(self.block_double_clicked.emit)
         self.scene_changed.emit()
         return item
 
@@ -153,11 +169,48 @@ class RFScene(QGraphicsScene):
     def get_all_blocks(self) -> List[RFBlock]:
         return [item.block for item in self._block_items.values()]
 
+    def get_selected_wires(self) -> List[WireItem]:
+        return [item for item in self.selectedItems() if isinstance(item, WireItem)]
+
+    def select_all(self) -> None:
+        for item in self.items():
+            if isinstance(item, (BlockItem, AnnotationItem, WireItem)):
+                item.setSelected(True)
+
+    def rebuild_block_ports(self, block_id: str) -> None:
+        item = self._block_items.get(block_id)
+        if item is None:
+            return
+        connected = [c for c in self._connections if c["src_block_id"] == block_id or c["dst_block_id"] == block_id]
+        for wire in list(self._wires):
+            src_item = wire.src_port.parentItem()
+            dst_item = wire.dst_port.parentItem()
+            if src_item is item or dst_item is item:
+                self._remove_wire(wire)
+        item.rebuild_ports()
+        for port_item in item._port_items:
+            port_item.connection_started.connect(self._on_port_drag_start)
+            port_item.connection_finished.connect(self._on_port_drag_end)
+        for c in connected:
+            src = self._block_items.get(c["src_block_id"])
+            dst = self._block_items.get(c["dst_block_id"])
+            if src and dst:
+                self.add_wire(src, c["src_port"], dst, c["dst_port"])
+        self.scene_changed.emit()
+
     # ------------------------------------------------------------------ #
     # Wire management                                                      #
     # ------------------------------------------------------------------ #
     def add_wire(self, src_item: BlockItem, src_port_name: str,
                  dst_item: BlockItem, dst_port_name: str) -> Optional[WireItem]:
+        if any(
+            c["src_block_id"] == src_item.block.block_id and
+            c["src_port"] == src_port_name and
+            c["dst_block_id"] == dst_item.block.block_id and
+            c["dst_port"] == dst_port_name
+            for c in self._connections
+        ):
+            return None
         src_port = src_item.get_port_item(src_port_name)
         dst_port = dst_item.get_port_item(dst_port_name)
         if src_port is None or dst_port is None:
@@ -230,11 +283,6 @@ class RFScene(QGraphicsScene):
 
         self.add_wire(src_item, src.port.name, dst_item, dst.port.name)
 
-    def mouseMoveEvent(self, event) -> None:
-        if self._dragging_wire:
-            self._dragging_wire.update_end(event.scenePos())
-        super().mouseMoveEvent(event)
-
     def mouseReleaseEvent(self, event) -> None:
         if self._dragging_wire and event.button() == Qt.LeftButton:
             # Check if we released over a port
@@ -281,6 +329,50 @@ class RFScene(QGraphicsScene):
     # ------------------------------------------------------------------ #
     # Signal propagation                                                   #
     # ------------------------------------------------------------------ #
+    @staticmethod
+    def _signals_equivalent(a: Optional[RFSignal], b: Optional[RFSignal]) -> bool:
+        if a is None or b is None:
+            return a is b
+        if abs(a.power_dbm - b.power_dbm) > 1e-9:
+            return False
+        if abs(a.carrier_frequency - b.carrier_frequency) > 1e-3:
+            return False
+        if len(a.spurs) != len(b.spurs):
+            return False
+        return True
+
+    @staticmethod
+    def _merge_signals(existing: Optional[RFSignal], incoming: RFSignal) -> RFSignal:
+        if existing is None:
+            return incoming.copy()
+        out = existing.copy()
+        p_total_mw = (10.0 ** (existing.power_dbm / 10.0)) + (10.0 ** (incoming.power_dbm / 10.0))
+        out.power_dbm = 10.0 * math.log10(max(p_total_mw, 1e-300))
+        for spur in incoming.spurs:
+            found = False
+            for e_spur in out.spurs:
+                if abs(e_spur.frequency - spur.frequency) < 1e-3:
+                    spur_mw = (10.0 ** (e_spur.power_dbm / 10.0)) + (10.0 ** (spur.power_dbm / 10.0))
+                    e_spur.power_dbm = 10.0 * math.log10(max(spur_mw, 1e-300))
+                    found = True
+                    break
+            if not found:
+                out.spurs.append(spur)
+        if existing.snr_db is None:
+            out.snr_db = incoming.snr_db
+        elif incoming.snr_db is not None:
+            out.snr_db = min(existing.snr_db, incoming.snr_db)
+        return out
+
+    @staticmethod
+    def _wire_key(connection: Dict) -> Tuple[str, str, str, str]:
+        return (
+            connection["src_block_id"],
+            connection["src_port"],
+            connection["dst_block_id"],
+            connection["dst_port"],
+        )
+
     def propagate_signals(self) -> Dict[str, "RFSignal"]:
         """
         Propagate signals from Source blocks through the graph.
@@ -298,35 +390,93 @@ class RFScene(QGraphicsScene):
             key = (c["src_block_id"], c["src_port"])
             adj.setdefault(key, []).append((c["dst_block_id"], c["dst_port"]))
 
+        wire_power: Dict[Tuple[str, str, str, str], float] = {}
+        for w in self._wires:
+            key = (
+                w.src_port.parentItem().block.block_id,
+                w.src_port.port.name,
+                w.dst_port.parentItem().block.block_id,
+                w.dst_port.port.name,
+            )
+            wire_power[key] = -math.inf
+
         # Find sources and seed
         queue: List[Tuple] = []
         for bid, item in self._block_items.items():
             if isinstance(item.block, Source):
+                if item.block.comment_mode == "out":
+                    continue
                 sig = item.block.generate()
                 signals_at.setdefault(bid, {})[item.block.output_ports[0].name] = sig
                 queue.append((bid, item.block.output_ports[0].name, sig))
+            else:
+                item.set_power_warning("ok")
 
-        # BFS propagation
-        visited = set()
+        # Event-based propagation
+        max_iterations = max(1000, len(self._connections) * 40)
+        iterations = 0
         while queue:
+            iterations += 1
+            if iterations > max_iterations:
+                break
             src_bid, src_port, sig = queue.pop(0)
-            if (src_bid, src_port) in visited:
-                continue
-            visited.add((src_bid, src_port))
             for dst_bid, dst_port in adj.get((src_bid, src_port), []):
                 dst_item = self._block_items.get(dst_bid)
                 if dst_item is None:
                     continue
-                result = dst_item.block.process(sig, dst_port)
-                signals_at.setdefault(dst_bid, {})[dst_port] = sig
+                c_key = (src_bid, src_port, dst_bid, dst_port)
+                wire_power[c_key] = sig.power_dbm
+                merged_in = self._merge_signals(signals_at.setdefault(dst_bid, {}).get(dst_port), sig)
+                prev_in = signals_at.setdefault(dst_bid, {}).get(dst_port)
+                signals_at.setdefault(dst_bid, {})[dst_port] = merged_in
 
                 # Power warning
-                status = dst_item.block.check_power(sig.power_dbm)
+                status = dst_item.block.check_power(merged_in.power_dbm)
                 dst_item.set_power_warning(status)
 
+                if self._signals_equivalent(prev_in, merged_in):
+                    continue
+
+                if dst_item.block.comment_mode == "out":
+                    continue
+
+                if dst_item.block.comment_mode == "through":
+                    result = {p.name: merged_in.copy() for p in dst_item.block.output_ports}
+                else:
+                    result = dst_item.block.process(merged_in, dst_port)
+                    if merged_in.snr_db is not None:
+                        for out_sig in result.values():
+                            if out_sig.snr_db is None:
+                                out_sig.snr_db = merged_in.snr_db - max(0.0, dst_item.block.nf_db)
+
                 for out_port, out_sig in result.items():
+                    prev_out = signals_at.setdefault(dst_bid, {}).get(out_port)
+                    if self._signals_equivalent(prev_out, out_sig):
+                        continue
                     signals_at.setdefault(dst_bid, {})[out_port] = out_sig
                     queue.append((dst_bid, out_port, out_sig))
+
+        for w in self._wires:
+            key = (
+                w.src_port.parentItem().block.block_id,
+                w.src_port.port.name,
+                w.dst_port.parentItem().block.block_id,
+                w.dst_port.port.name,
+            )
+            pwr = wire_power.get(key, -math.inf)
+            dst_block = w.dst_port.parentItem().block
+            color = QColor("#BBBBFF")
+            if math.isfinite(pwr):
+                if dst_block.max_input_power_dbm is not None and pwr > dst_block.max_input_power_dbm:
+                    color = QColor("#FF3333")
+                else:
+                    p1db_in = None
+                    if dst_block.p1db_dbm is not None:
+                        p1db_in = dst_block.p1db_dbm - dst_block.gain_db
+                    if p1db_in is not None and pwr > p1db_in:
+                        color = QColor("#FFD75E")
+            text = f"{pwr:.2f} dBm" if math.isfinite(pwr) else "-∞ dBm"
+            w.set_power_label(text, color)
 
         return signals_at
 
@@ -369,12 +519,16 @@ class RFScene(QGraphicsScene):
     def get_connections(self) -> List[Dict]:
         return list(self._connections)
 
+    def get_wires(self) -> List[WireItem]:
+        return list(self._wires)
+
     def clear_scene(self) -> None:
         """Remove all items and reset state."""
         super().clear()
         self._block_items.clear()
         self._wires.clear()
         self._connections.clear()
+        self.scene_changed.emit()
 
 
 # ======================================================================= #
@@ -405,6 +559,8 @@ class RFCanvasView(QGraphicsView):
                     self.scene().remove_block(item.block.block_id)
                 elif isinstance(item, AnnotationItem):
                     self.scene().removeItem(item)
+                elif isinstance(item, WireItem):
+                    self.scene()._remove_wire(item)
         elif event.key() in (Qt.Key_Plus, Qt.Key_Equal):
             self._zoom = min(self._zoom * 1.2, 10.0)
             self.setTransform(QTransform().scale(self._zoom, self._zoom))

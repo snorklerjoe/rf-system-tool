@@ -18,7 +18,7 @@ from PySide6.QtGui import QColor
 from rf_tool.models.rf_block import RFBlock
 from rf_tool.blocks.components import (
     Attenuator, Mixer, SparBlock, TransferFnBlock,
-    LowPassFilter, HighPassFilter, PowerSplitter, Switch, Source,
+    LowPassFilter, HighPassFilter, PowerSplitter, PowerCombiner, Switch, Source,
 )
 
 
@@ -33,6 +33,7 @@ class PropertiesPanel(QWidget):
     """
 
     block_changed = Signal(str)   # block_id
+    block_ports_changed = Signal(str)  # block_id
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -81,12 +82,20 @@ class PropertiesPanel(QWidget):
         self._title.setText(f"{b.BLOCK_TYPE}  [{b.block_id[:8]}]")
 
         self._add_str_row("Label", b.label, self._on_label_changed)
-        self._add_float_row("Gain (dB)", b.gain_db, -200, 200, self._on_gain_changed)
-        self._add_float_row("NF (dB)", b.nf_db, 0, 100, self._on_nf_changed)
-        self._add_optional_float_row("P1dB out (dBm)", b.p1db_dbm, -100, 100, self._on_p1db_changed)
-        self._add_optional_float_row("OIP3 (dBm)", b.oip3_dbm, -100, 100, self._on_oip3_changed)
-        self._add_optional_float_row("Min Input (dBm)", b.min_input_power_dbm, -200, 100, self._on_min_pwr_changed)
-        self._add_optional_float_row("Max Input (dBm)", b.max_input_power_dbm, -200, 100, self._on_max_pwr_changed)
+        self._add_enum_row(
+            "Comment",
+            [("Active", "active"), ("Comment Out", "out"), ("Comment Through", "through")],
+            b.comment_mode,
+            self._on_comment_mode_changed,
+        )
+
+        if not isinstance(b, Source):
+            self._add_float_row("Gain (dB)", b.gain_db, -200, 200, self._on_gain_changed)
+            self._add_float_row("NF (dB)", b.nf_db, 0, 100, self._on_nf_changed)
+            self._add_optional_float_row("P1dB out (dBm)", b.p1db_dbm, -100, 100, self._on_p1db_changed)
+            self._add_optional_float_row("OIP3 (dBm)", b.oip3_dbm, -100, 100, self._on_oip3_changed)
+            self._add_optional_float_row("Min Input (dBm)", b.min_input_power_dbm, -200, 100, self._on_min_pwr_changed)
+            self._add_optional_float_row("Max Input (dBm)", b.max_input_power_dbm, -200, 100, self._on_max_pwr_changed)
 
         # Block-specific extras
         if isinstance(b, Attenuator):
@@ -104,12 +113,13 @@ class PropertiesPanel(QWidget):
         elif isinstance(b, LowPassFilter) or isinstance(b, HighPassFilter):
             self._add_int_row("Order", b.order, 1, 20, self._on_order_changed)
             self._add_freq_row("Cutoff (Hz)", b.cutoff_hz, self._on_cutoff_changed)
-        elif isinstance(b, PowerSplitter):
+        elif isinstance(b, (PowerSplitter, PowerCombiner)):
             self._add_int_row("N ways", b.n_ways, 2, 16, self._on_nways_changed)
         elif isinstance(b, Source):
             self._add_freq_row("Frequency (Hz)", b.frequency, self._on_src_freq_changed)
             self._add_float_row("Output Power (dBm)", b.output_power_dbm, -200, 100,
                                 self._on_src_pwr_changed)
+            self._add_optional_float_row("SNR (dB)", b.snr_db, -100, 200, self._on_src_snr_changed)
 
         # Color picker button
         btn_color = QPushButton("Choose Colour…")
@@ -168,6 +178,16 @@ class PropertiesPanel(QWidget):
         spin.valueChanged.connect(callback)
         self._form_layout.addRow(label + ":", spin)
         return spin
+
+    def _add_enum_row(self, label: str, choices: list, selected_value: str, callback) -> QComboBox:
+        combo = QComboBox()
+        for display, value in choices:
+            combo.addItem(display, value)
+        idx = combo.findData(selected_value)
+        combo.setCurrentIndex(0 if idx < 0 else idx)
+        combo.currentIndexChanged.connect(lambda _: callback(combo.currentData()))
+        self._form_layout.addRow(label + ":", combo)
+        return combo
 
     def _add_freq_row(self, label: str, value: float, callback) -> QLineEdit:
         edit = QLineEdit(f"{value:.6g}")
@@ -262,8 +282,9 @@ class PropertiesPanel(QWidget):
             pass
 
     def _on_nways_changed(self, v):
-        if isinstance(self._block, PowerSplitter):
-            self._block.n_ways = max(2, v)
+        if isinstance(self._block, (PowerSplitter, PowerCombiner)):
+            self._block.set_n_ways(v)
+            self.block_ports_changed.emit(self._block.block_id)
             self._emit_changed()
 
     def _on_src_freq_changed(self, v):
@@ -277,6 +298,16 @@ class PropertiesPanel(QWidget):
     def _on_src_pwr_changed(self, v):
         if isinstance(self._block, Source):
             self._block.output_power_dbm = v
+            self._emit_changed()
+
+    def _on_src_snr_changed(self, v):
+        if isinstance(self._block, Source):
+            self._block.snr_db = v
+            self._emit_changed()
+
+    def _on_comment_mode_changed(self, v):
+        if self._block is not None:
+            self._block.comment_mode = v or "active"
             self._emit_changed()
 
     def _on_choose_color(self):
@@ -334,3 +365,86 @@ class CascadeReadoutDialog(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+
+class SourceSinkMetricsPanel(QWidget):
+    """Dock widget content for source/sink-dependent system metrics."""
+
+    source_changed = Signal(str)
+    sink_changed = Signal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 4)
+
+        form = QFormLayout()
+        self._source_combo = QComboBox()
+        self._sink_combo = QComboBox()
+        self._source_combo.currentIndexChanged.connect(self._on_source_changed)
+        self._sink_combo.currentIndexChanged.connect(self._on_sink_changed)
+        form.addRow("Source:", self._source_combo)
+        form.addRow("Sink:", self._sink_combo)
+        layout.addLayout(form)
+
+        self._sink_level = QLabel("N/A")
+        self._sink_snr = QLabel("N/A")
+        self._max_src = QLabel("N/A")
+        self._p1db = QLabel("N/A")
+        self._ip3 = QLabel("N/A")
+        form2 = QFormLayout()
+        form2.addRow("Sink level:", self._sink_level)
+        form2.addRow("Sink SNR:", self._sink_snr)
+        form2.addRow("Max source level (damage):", self._max_src)
+        form2.addRow("Cascaded P1dB:", self._p1db)
+        form2.addRow("Cascaded IP3:", self._ip3)
+        layout.addLayout(form2)
+        layout.addStretch()
+
+    def set_sources(self, rows: List[tuple]) -> None:
+        current = self.selected_source_id()
+        self._source_combo.blockSignals(True)
+        self._source_combo.clear()
+        for label, block_id in rows:
+            self._source_combo.addItem(label, block_id)
+        idx = self._source_combo.findData(current)
+        self._source_combo.setCurrentIndex(0 if idx < 0 and self._source_combo.count() else idx)
+        self._source_combo.blockSignals(False)
+
+    def set_sinks(self, rows: List[tuple]) -> None:
+        current = self.selected_sink_id()
+        self._sink_combo.blockSignals(True)
+        self._sink_combo.clear()
+        for label, block_id in rows:
+            self._sink_combo.addItem(label, block_id)
+        idx = self._sink_combo.findData(current)
+        self._sink_combo.setCurrentIndex(0 if idx < 0 and self._sink_combo.count() else idx)
+        self._sink_combo.blockSignals(False)
+
+    def selected_source_id(self) -> Optional[str]:
+        return self._source_combo.currentData()
+
+    def selected_sink_id(self) -> Optional[str]:
+        return self._sink_combo.currentData()
+
+    def set_metrics(self, sink_level: Optional[float], sink_snr: Optional[float], max_source: Optional[float],
+                    p1db: Optional[float], ip3: Optional[float]) -> None:
+        self._sink_level.setText("N/A" if sink_level is None else f"{sink_level:.2f} dBm")
+        self._sink_snr.setText("N/A" if sink_snr is None else f"{sink_snr:.2f} dB")
+        self._max_src.setText("N/A" if max_source is None else f"{max_source:.2f} dBm")
+        self._p1db.setText("N/A" if p1db is None else f"{p1db:.2f} dBm")
+        self._ip3.setText("N/A" if ip3 is None else f"{ip3:.2f} dBm")
+
+        self._max_src.setStyleSheet("" if max_source is None else "color: #FF5555; font-weight: bold;")
+        self._p1db.setStyleSheet("" if p1db is None else "color: #FFD75E;")
+        self._ip3.setStyleSheet("" if ip3 is None else "color: #FFD75E;")
+
+    def _on_source_changed(self):
+        source_id = self.selected_source_id()
+        if source_id:
+            self.source_changed.emit(source_id)
+
+    def _on_sink_changed(self):
+        sink_id = self.selected_sink_id()
+        if sink_id:
+            self.sink_changed.emit(sink_id)

@@ -65,6 +65,7 @@ class TestSignalConstruction:
         assert sig.power_dbm == pytest.approx(-10.0)
         assert sig.spurs == []
         assert sig.phase_noise_dbc_hz == {}
+        assert sig.snr_db is None
 
     def test_with_spurs(self):
         spur = SpurTone(2e9, -50.0)
@@ -214,8 +215,13 @@ class TestSignalSerialisation:
     def test_to_dict_keys(self):
         sig = Signal(1e9, -10.0)
         d = sig.to_dict()
-        for key in ("carrier_frequency", "power_dbm", "spurs", "phase_noise_dbc_hz"):
+        for key in ("carrier_frequency", "power_dbm", "spurs", "phase_noise_dbc_hz", "snr_db"):
             assert key in d
+
+    def test_round_trip_with_snr(self):
+        sig = Signal(1e9, -12.0, snr_db=48.0)
+        rt = Signal.from_dict(sig.to_dict())
+        assert rt.snr_db == pytest.approx(48.0)
 
     def test_round_trip_no_spurs(self):
         sig = Signal(2.4e9, -15.0)
