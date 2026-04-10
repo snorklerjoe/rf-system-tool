@@ -160,6 +160,7 @@ class BlockItem(QGraphicsObject):
             self._port_items.append(pi)
 
     def rebuild_ports(self) -> None:
+        """Recreate port graphics after block port definitions change."""
         for pi in self._port_items:
             pi.setParentItem(None)
             if pi.scene():

@@ -495,6 +495,7 @@ class PowerSplitter(RFBlock):
         super().__init__(**kwargs)
 
     def set_n_ways(self, n_ways: int) -> None:
+        """Update split/combine ways and rebuild dynamic ports and loss settings."""
         self.n_ways = max(2, n_ways)
         split_loss_db = -10.0 * math.log10(self.n_ways)
         self.gain_db = split_loss_db

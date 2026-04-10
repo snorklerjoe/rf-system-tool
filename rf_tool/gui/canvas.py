@@ -26,6 +26,13 @@ from rf_tool.gui.node_items import (
     BlockItem, PortItem, AnnotationItem, create_block_item,
 )
 
+POWER_EPSILON_DBM = 1e-9
+FREQUENCY_EPSILON_HZ = 1e-3
+MIN_POWER_MW = 1e-300
+MIN_PROPAGATION_ITERATIONS = 1000
+# Multiplier chosen to allow multi-branch convergence while preventing runaway loops.
+ITERATIONS_PER_CONNECTION = 40
+
 
 # ======================================================================= #
 # Wire item                                                                #
@@ -333,9 +340,9 @@ class RFScene(QGraphicsScene):
     def _signals_equivalent(a: Optional[RFSignal], b: Optional[RFSignal]) -> bool:
         if a is None or b is None:
             return a is b
-        if abs(a.power_dbm - b.power_dbm) > 1e-9:
+        if abs(a.power_dbm - b.power_dbm) > POWER_EPSILON_DBM:
             return False
-        if abs(a.carrier_frequency - b.carrier_frequency) > 1e-3:
+        if abs(a.carrier_frequency - b.carrier_frequency) > FREQUENCY_EPSILON_HZ:
             return False
         if len(a.spurs) != len(b.spurs):
             return False
@@ -347,21 +354,30 @@ class RFScene(QGraphicsScene):
             return incoming.copy()
         out = existing.copy()
         p_total_mw = (10.0 ** (existing.power_dbm / 10.0)) + (10.0 ** (incoming.power_dbm / 10.0))
-        out.power_dbm = 10.0 * math.log10(max(p_total_mw, 1e-300))
+        out.power_dbm = 10.0 * math.log10(max(p_total_mw, MIN_POWER_MW))
         for spur in incoming.spurs:
             found = False
             for e_spur in out.spurs:
                 if abs(e_spur.frequency - spur.frequency) < 1e-3:
                     spur_mw = (10.0 ** (e_spur.power_dbm / 10.0)) + (10.0 ** (spur.power_dbm / 10.0))
-                    e_spur.power_dbm = 10.0 * math.log10(max(spur_mw, 1e-300))
+                    e_spur.power_dbm = 10.0 * math.log10(max(spur_mw, MIN_POWER_MW))
                     found = True
                     break
             if not found:
                 out.spurs.append(spur)
+        existing_mw = 10.0 ** (existing.power_dbm / 10.0)
+        incoming_mw = 10.0 ** (incoming.power_dbm / 10.0)
         if existing.snr_db is None:
             out.snr_db = incoming.snr_db
-        elif incoming.snr_db is not None:
-            out.snr_db = min(existing.snr_db, incoming.snr_db)
+        elif incoming.snr_db is None:
+            out.snr_db = existing.snr_db
+        else:
+            # Assumes uncorrelated noise terms and equal measurement bandwidth.
+            noise_existing = existing_mw / (10.0 ** (existing.snr_db / 10.0))
+            noise_incoming = incoming_mw / (10.0 ** (incoming.snr_db / 10.0))
+            total_noise = noise_existing + noise_incoming
+            total_signal = existing_mw + incoming_mw
+            out.snr_db = 10.0 * math.log10(total_signal / max(total_noise, MIN_POWER_MW))
         return out
 
     @staticmethod
@@ -413,7 +429,7 @@ class RFScene(QGraphicsScene):
                 item.set_power_warning("ok")
 
         # Event-based propagation
-        max_iterations = max(1000, len(self._connections) * 40)
+        max_iterations = max(MIN_PROPAGATION_ITERATIONS, len(self._connections) * ITERATIONS_PER_CONNECTION)
         iterations = 0
         while queue:
             iterations += 1

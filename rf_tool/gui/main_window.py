@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 from typing import Optional, Dict, List
 import uuid
+import copy
 
 from PySide6.QtWidgets import (
     QMainWindow, QDockWidget, QToolBar, QStatusBar,
@@ -46,6 +47,7 @@ class MainWindow(QMainWindow):
         self._setup_menu()
         self._setup_status_bar()
         self._clipboard_payload: Optional[Dict] = None
+        self._paste_count: int = 0
 
         self._scene.block_selected.connect(self._on_block_selected)
         self._scene.block_double_clicked.connect(self._on_block_double_clicked)
@@ -323,6 +325,8 @@ class MainWindow(QMainWindow):
     def _paste_selected(self) -> None:
         if not self._clipboard_payload:
             return
+        self._paste_count += 1
+        offset = 30.0 * self._paste_count
         id_map: Dict[str, str] = {}
         pasted_items = []
         for bd in self._clipboard_payload["blocks"]:
@@ -331,8 +335,8 @@ class MainWindow(QMainWindow):
             new_id = str(uuid.uuid4())
             id_map[old_id] = new_id
             new_bd["block_id"] = new_id
-            new_bd["x"] = float(bd.get("x", 0.0)) + 30.0
-            new_bd["y"] = float(bd.get("y", 0.0)) + 30.0
+            new_bd["x"] = float(bd.get("x", 0.0)) + offset
+            new_bd["y"] = float(bd.get("y", 0.0)) + offset
             block = block_from_dict(new_bd)
             pasted_items.append(self._scene.add_block(block))
         for c in self._clipboard_payload["connections"]:
@@ -347,8 +351,8 @@ class MainWindow(QMainWindow):
         for ann in self._clipboard_payload.get("annotations", []):
             self._scene.add_annotation(
                 ann.get("text", "Annotation"),
-                float(ann.get("x", 0.0)) + 30.0,
-                float(ann.get("y", 0.0)) + 30.0,
+                float(ann.get("x", 0.0)) + offset,
+                float(ann.get("y", 0.0)) + offset,
                 ann.get("font", "Arial"),
                 int(ann.get("font_size", 10)),
                 ann.get("color", "#FFFFFF"),
@@ -473,7 +477,12 @@ class MainWindow(QMainWindow):
             if b.comment_mode == "out":
                 continue
             if b.comment_mode == "through":
-                out.append(RFBlock(label=b.label, gain_db=0.0, nf_db=0.0))
+                b_passthrough = copy.deepcopy(b)
+                b_passthrough.gain_db = 0.0
+                b_passthrough.nf_db = 0.0
+                b_passthrough.p1db_dbm = None
+                b_passthrough.oip3_dbm = None
+                out.append(b_passthrough)
             else:
                 out.append(b)
         return out

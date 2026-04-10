@@ -408,7 +408,12 @@ class SourceSinkMetricsPanel(QWidget):
         for label, block_id in rows:
             self._source_combo.addItem(label, block_id)
         idx = self._source_combo.findData(current)
-        self._source_combo.setCurrentIndex(0 if idx < 0 and self._source_combo.count() else idx)
+        if self._source_combo.count() == 0:
+            self._source_combo.setCurrentIndex(-1)
+        elif idx < 0:
+            self._source_combo.setCurrentIndex(0)
+        else:
+            self._source_combo.setCurrentIndex(idx)
         self._source_combo.blockSignals(False)
 
     def set_sinks(self, rows: List[tuple]) -> None:
@@ -418,7 +423,12 @@ class SourceSinkMetricsPanel(QWidget):
         for label, block_id in rows:
             self._sink_combo.addItem(label, block_id)
         idx = self._sink_combo.findData(current)
-        self._sink_combo.setCurrentIndex(0 if idx < 0 and self._sink_combo.count() else idx)
+        if self._sink_combo.count() == 0:
+            self._sink_combo.setCurrentIndex(-1)
+        elif idx < 0:
+            self._sink_combo.setCurrentIndex(0)
+        else:
+            self._sink_combo.setCurrentIndex(idx)
         self._sink_combo.blockSignals(False)
 
     def selected_source_id(self) -> Optional[str]:
