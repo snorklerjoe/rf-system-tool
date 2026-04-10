@@ -15,7 +15,7 @@ from typing import Dict, List, Optional, Tuple
 
 from PySide6.QtWidgets import (
     QGraphicsScene, QGraphicsView,
-    QGraphicsPathItem, QGraphicsSimpleTextItem,
+    QGraphicsPathItem, QGraphicsSimpleTextItem, QGraphicsItem,
 )
 from PySide6.QtGui import QPen, QColor, QPainterPath, QBrush, QTransform
 from PySide6.QtCore import Qt, QPointF, Signal
@@ -51,7 +51,7 @@ class WireItem(QGraphicsPathItem):
         self.setPen(QPen(QColor("#00CCFF"), 2.0, Qt.SolidLine,
                          Qt.RoundCap, Qt.RoundJoin))
         self.setZValue(-1)
-        self.setFlag(self.ItemIsSelectable, True)
+        self.setFlag(QGraphicsItem.ItemIsSelectable, True)
         self._label = QGraphicsSimpleTextItem("-∞ dBm", self)
         self._label.setBrush(QColor("#BBBBFF"))
         self._label.setZValue(1)
@@ -557,7 +557,7 @@ class RFCanvasView(QGraphicsView):
     def __init__(self, scene: RFScene, parent=None):
         super().__init__(scene, parent)
         self.setRenderHint(self.renderHints() | self.renderHints().Antialiasing)
-        self.setDragMode(QGraphicsView.RubberBandDrag)
+        self.setDragMode(QGraphicsView.NoDrag)
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.AnchorUnderMouse)
         self._zoom = 1.0
