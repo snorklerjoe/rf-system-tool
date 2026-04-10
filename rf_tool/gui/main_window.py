@@ -5,23 +5,25 @@ from __future__ import annotations
 
 import os
 from typing import Optional, Dict, List
+import uuid
+import copy
 
 from PySide6.QtWidgets import (
     QMainWindow, QDockWidget, QToolBar, QStatusBar,
     QFileDialog, QMessageBox, QWidget, QLabel,
-    QInputDialog, QApplication,
 )
-from PySide6.QtGui import QAction, QIcon, QKeySequence, QColor
+from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtCore import Qt, QPointF
 
-from rf_tool.gui.canvas import RFScene, RFCanvasView
+from rf_tool.gui.canvas import RFScene, RFCanvasView, WireItem
 from rf_tool.gui.node_items import BlockItem, AnnotationItem
-from rf_tool.gui.dialogs import PropertiesPanel, CascadeReadoutDialog
+from rf_tool.gui.dialogs import PropertiesPanel, CascadeReadoutDialog, SourceSinkMetricsPanel
 from rf_tool.blocks.components import (
     Amplifier, Attenuator, Mixer, SparBlock, TransferFnBlock,
-    LowPassFilter, HighPassFilter, PowerSplitter, Switch, Source, Sink,
+    LowPassFilter, HighPassFilter, PowerSplitter, PowerCombiner, Switch, Source, Sink,
     block_from_dict,
 )
+from rf_tool.models.rf_block import RFBlock
 from rf_tool.engine.cascade import compute_cascade_metrics
 from rf_tool.serialization.json_io import save_scene, load_scene
 from rf_tool.export.exporters import export_cascade_csv, export_html_report, export_canvas_image
@@ -40,12 +42,17 @@ class MainWindow(QMainWindow):
 
         self._setup_scene()
         self._setup_dock_properties()
+        self._setup_dock_metrics()
         self._setup_toolbar()
         self._setup_menu()
         self._setup_status_bar()
+        self._clipboard_payload: Optional[Dict] = None
+        self._paste_count: int = 0
 
         self._scene.block_selected.connect(self._on_block_selected)
+        self._scene.block_double_clicked.connect(self._on_block_double_clicked)
         self._scene.scene_changed.connect(self._on_scene_changed)
+        self._refresh_metrics_block_lists()
 
     # ------------------------------------------------------------------ #
     # Setup                                                                #
@@ -57,11 +64,24 @@ class MainWindow(QMainWindow):
 
     def _setup_dock_properties(self) -> None:
         dock = QDockWidget("Properties", self)
+        dock.setObjectName("propertiesDock")
         dock.setAllowedAreas(Qt.RightDockWidgetArea | Qt.LeftDockWidgetArea)
         self._props_panel = PropertiesPanel()
         self._props_panel.block_changed.connect(self._on_block_property_changed)
+        self._props_panel.block_ports_changed.connect(self._scene.rebuild_block_ports)
         dock.setWidget(self._props_panel)
         self.addDockWidget(Qt.RightDockWidgetArea, dock)
+        self._properties_dock = dock
+
+    def _setup_dock_metrics(self) -> None:
+        dock = QDockWidget("Source/Sink Metrics", self)
+        dock.setAllowedAreas(Qt.RightDockWidgetArea | Qt.LeftDockWidgetArea)
+        self._metrics_panel = SourceSinkMetricsPanel()
+        self._metrics_panel.source_changed.connect(lambda _: self._update_metrics_panel())
+        self._metrics_panel.sink_changed.connect(lambda _: self._update_metrics_panel())
+        dock.setWidget(self._metrics_panel)
+        self.addDockWidget(Qt.RightDockWidgetArea, dock)
+        self.splitDockWidget(self._properties_dock, dock, Qt.Vertical)
 
     def _setup_toolbar(self) -> None:
         tb = self.addToolBar("Blocks")
@@ -76,6 +96,7 @@ class MainWindow(QMainWindow):
             ("LPF",          "⊓ LPF",    self._add_lpf),
             ("HPF",          "⊔ HPF",    self._add_hpf),
             ("Splitter",     "⊕ Spl",    self._add_splitter),
+            ("Combiner",     "⊗ Cmb",    self._add_combiner),
             ("Switch 1×2",   "⇀ SW",     self._add_switch),
             ("Source",       "~ Src",    self._add_source),
             ("Sink",         "⊥ Snk",    self._add_sink),
@@ -150,12 +171,32 @@ class MainWindow(QMainWindow):
 
         # Edit menu
         edit_menu = menubar.addMenu("&Edit")
+        act_cut = QAction("Cu&t", self, shortcut=QKeySequence.Cut)
+        act_cut.triggered.connect(self._cut_selected)
+        act_copy = QAction("&Copy", self, shortcut=QKeySequence.Copy)
+        act_copy.triggered.connect(self._copy_selected)
+        act_paste = QAction("&Paste", self, shortcut=QKeySequence.Paste)
+        act_paste.triggered.connect(self._paste_selected)
         act_del = QAction("&Delete Selected", self, shortcut=Qt.Key_Delete)
         act_del.triggered.connect(self._delete_selected)
         act_sel_all = QAction("Select &All", self, shortcut=QKeySequence.SelectAll)
-        act_sel_all.triggered.connect(lambda: self._scene.selectAll())
+        act_sel_all.triggered.connect(self._scene.select_all)
+        act_comment_out = QAction("Comment &Out", self)
+        act_comment_out.triggered.connect(lambda: self._set_selected_comment_mode("out"))
+        act_comment_through = QAction("Comment T&hrough", self)
+        act_comment_through.triggered.connect(lambda: self._set_selected_comment_mode("through"))
+        act_uncomment = QAction("&Uncomment", self)
+        act_uncomment.triggered.connect(lambda: self._set_selected_comment_mode("active"))
+        edit_menu.addAction(act_cut)
+        edit_menu.addAction(act_copy)
+        edit_menu.addAction(act_paste)
+        edit_menu.addSeparator()
         edit_menu.addAction(act_del)
         edit_menu.addAction(act_sel_all)
+        edit_menu.addSeparator()
+        edit_menu.addAction(act_comment_out)
+        edit_menu.addAction(act_comment_through)
+        edit_menu.addAction(act_uncomment)
 
         # Analysis menu
         analysis_menu = menubar.addMenu("&Analysis")
@@ -204,6 +245,7 @@ class MainWindow(QMainWindow):
     def _add_lpf(self):        self._add_block(LowPassFilter())
     def _add_hpf(self):        self._add_block(HighPassFilter())
     def _add_splitter(self):   self._add_block(PowerSplitter())
+    def _add_combiner(self):   self._add_block(PowerCombiner())
     def _add_switch(self):     self._add_block(Switch())
     def _add_source(self):     self._add_block(Source())
     def _add_sink(self):       self._add_block(Sink())
@@ -227,6 +269,7 @@ class MainWindow(QMainWindow):
         if item:
             item.update_label()
             item.update()
+        self._update_metrics_panel()
         self._status.showMessage("Property updated")
 
     def _on_scene_changed(self) -> None:
@@ -234,6 +277,8 @@ class MainWindow(QMainWindow):
         if self._current_file:
             title += f" — {os.path.basename(self._current_file)}"
         self.setWindowTitle(title + " *")
+        self._refresh_metrics_block_lists()
+        self._update_metrics_panel()
 
     def _delete_selected(self) -> None:
         for item in list(self._scene.selectedItems()):
@@ -241,6 +286,81 @@ class MainWindow(QMainWindow):
                 self._scene.remove_block(item.block.block_id)
             elif isinstance(item, AnnotationItem):
                 self._scene.removeItem(item)
+            elif isinstance(item, WireItem):
+                self._scene._remove_wire(item)
+
+    def _set_selected_comment_mode(self, mode: str) -> None:
+        changed = False
+        for item in self._scene.selectedItems():
+            if isinstance(item, BlockItem):
+                item.block.comment_mode = mode
+                item.update()
+                changed = True
+        if changed:
+            self._scene.scene_changed.emit()
+
+    def _copy_selected(self) -> None:
+        selected_blocks = [i for i in self._scene.selectedItems() if isinstance(i, BlockItem)]
+        selected_ids = {item.block.block_id for item in selected_blocks}
+        if not selected_ids:
+            self._clipboard_payload = None
+            return
+        block_dicts = [item.block.to_dict() for item in selected_blocks]
+        conns = [
+            c for c in self._scene.get_connections()
+            if c["src_block_id"] in selected_ids and c["dst_block_id"] in selected_ids
+        ]
+        annotations = [
+            item.to_dict() for item in self._scene.selectedItems()
+            if isinstance(item, AnnotationItem)
+        ]
+        self._clipboard_payload = {"blocks": block_dicts, "connections": conns, "annotations": annotations}
+        self._status.showMessage(f"Copied {len(block_dicts)} blocks")
+
+    def _cut_selected(self) -> None:
+        self._copy_selected()
+        self._delete_selected()
+        self._status.showMessage("Cut selection")
+
+    def _paste_selected(self) -> None:
+        if not self._clipboard_payload:
+            return
+        self._paste_count += 1
+        offset = 30.0 * self._paste_count
+        id_map: Dict[str, str] = {}
+        pasted_items = []
+        for bd in self._clipboard_payload["blocks"]:
+            new_bd = dict(bd)
+            old_id = bd["block_id"]
+            new_id = str(uuid.uuid4())
+            id_map[old_id] = new_id
+            new_bd["block_id"] = new_id
+            new_bd["x"] = float(bd.get("x", 0.0)) + offset
+            new_bd["y"] = float(bd.get("y", 0.0)) + offset
+            block = block_from_dict(new_bd)
+            pasted_items.append(self._scene.add_block(block))
+        for c in self._clipboard_payload["connections"]:
+            src_id = id_map.get(c["src_block_id"])
+            dst_id = id_map.get(c["dst_block_id"])
+            if not src_id or not dst_id:
+                continue
+            src_item = self._scene.get_block_item(src_id)
+            dst_item = self._scene.get_block_item(dst_id)
+            if src_item and dst_item:
+                self._scene.add_wire(src_item, c["src_port"], dst_item, c["dst_port"])
+        for ann in self._clipboard_payload.get("annotations", []):
+            self._scene.add_annotation(
+                ann.get("text", "Annotation"),
+                float(ann.get("x", 0.0)) + offset,
+                float(ann.get("y", 0.0)) + offset,
+                ann.get("font", "Arial"),
+                int(ann.get("font_size", 10)),
+                ann.get("color", "#FFFFFF"),
+            )
+        self._scene.clearSelection()
+        for item in pasted_items:
+            item.setSelected(True)
+        self._status.showMessage(f"Pasted {len(pasted_items)} blocks")
 
     # ------------------------------------------------------------------ #
     # Propagate signals                                                    #
@@ -248,6 +368,7 @@ class MainWindow(QMainWindow):
     def _propagate_signals(self) -> None:
         signals = self._scene.propagate_signals()
         n_blocks = len(signals)
+        self._update_metrics_panel()
         self._status.showMessage(f"Propagated signals through {n_blocks} blocks")
 
         # If a sink is selected and has a signal, show spectrum
@@ -260,9 +381,10 @@ class MainWindow(QMainWindow):
 
     def _open_spectrum(self, sink_block) -> None:
         from rf_tool.plots.plot_windows import SpectrumPlot
-        win = SpectrumPlot(self)
+        win = SpectrumPlot(None)
         win.set_signal(sink_block.last_signal)
         win.setWindowTitle(f"Spectrum at: {sink_block.label}")
+        win.setAttribute(Qt.WA_DeleteOnClose, True)
         win.show()
         # Store reference
         if not hasattr(self, "_plot_windows"):
@@ -292,20 +414,14 @@ class MainWindow(QMainWindow):
                                     "Add at least two blocks to run cascade analysis.")
             return
 
+        selected_wires = self._scene.get_selected_wires()
+        if not selected_wires:
+            QMessageBox.information(self, "P2P Analysis", "Select one or more wires on the diagram first.")
+            return
+        selected_wires.sort(key=lambda w: w.src_port.scenePos().x())
+        start_id = selected_wires[0].src_port.parentItem().block.block_id
+        end_id = selected_wires[-1].dst_port.parentItem().block.block_id
         labels = {b.block_id: f"{b.BLOCK_TYPE}: {b.label}" for b in blocks}
-        choices = list(labels.values())
-
-        start_choice, ok1 = QInputDialog.getItem(
-            self, "P2P Analysis", "Select Start Block:", choices, 0, False)
-        if not ok1:
-            return
-        end_choice, ok2 = QInputDialog.getItem(
-            self, "P2P Analysis", "Select End Block:", choices, 1, False)
-        if not ok2:
-            return
-
-        start_id = [bid for bid, lbl in labels.items() if lbl == start_choice][0]
-        end_id = [bid for bid, lbl in labels.items() if lbl == end_choice][0]
 
         path_ids = self._scene.find_path(start_id, end_id)
         if path_ids is None:
@@ -315,7 +431,7 @@ class MainWindow(QMainWindow):
 
         path_blocks = [self._scene.get_block_item(bid).block for bid in path_ids
                        if self._scene.get_block_item(bid) is not None]
-        metrics = compute_cascade_metrics(path_blocks)
+        metrics = compute_cascade_metrics(self._effective_blocks(path_blocks))
 
         dlg = CascadeReadoutDialog(
             metrics,
@@ -332,10 +448,14 @@ class MainWindow(QMainWindow):
             return
 
         from rf_tool.plots.plot_windows import GainNFPlot, compute_frequency_sweep
-        data = compute_frequency_sweep(blocks)
-        metrics = compute_cascade_metrics(blocks)
+        eff_blocks = self._effective_blocks(blocks)
+        if not eff_blocks:
+            QMessageBox.information(self, "Frequency Plot", "No active blocks to analyze.")
+            return
+        data = compute_frequency_sweep(eff_blocks)
+        metrics = compute_cascade_metrics(eff_blocks)
 
-        win = GainNFPlot(self)
+        win = GainNFPlot(None)
         win.set_data(
             freq_hz=data["freq_hz"],
             gain_db=data["gain_db"],
@@ -345,10 +465,86 @@ class MainWindow(QMainWindow):
             damage_dbm=metrics.get("min_damage_dbm"),
             title="Gain / NF vs. Frequency (all blocks)",
         )
+        win.setAttribute(Qt.WA_DeleteOnClose, True)
         win.show()
         if not hasattr(self, "_plot_windows"):
             self._plot_windows = []
         self._plot_windows.append(win)
+
+    def _effective_blocks(self, blocks: List[RFBlock]) -> List[RFBlock]:
+        out: List[RFBlock] = []
+        for b in blocks:
+            if b.comment_mode == "out":
+                continue
+            if b.comment_mode == "through":
+                b_passthrough = copy.deepcopy(b)
+                b_passthrough.gain_db = 0.0
+                b_passthrough.nf_db = 0.0
+                b_passthrough.p1db_dbm = None
+                b_passthrough.oip3_dbm = None
+                out.append(b_passthrough)
+            else:
+                out.append(b)
+        return out
+
+    def _refresh_metrics_block_lists(self) -> None:
+        blocks = self._scene.get_all_blocks()
+        src_rows = [(f"{b.BLOCK_TYPE}: {b.label}", b.block_id) for b in blocks if isinstance(b, Source)]
+        sink_rows = [(f"{b.BLOCK_TYPE}: {b.label}", b.block_id) for b in blocks if isinstance(b, Sink)]
+        self._metrics_panel.set_sources(src_rows)
+        self._metrics_panel.set_sinks(sink_rows)
+
+    def _path_blocks(self, start_id: Optional[str], end_id: Optional[str]) -> List[RFBlock]:
+        if not start_id or not end_id:
+            return []
+        path = self._scene.find_path(start_id, end_id)
+        if not path:
+            return []
+        return [self._scene.get_block_item(bid).block for bid in path if self._scene.get_block_item(bid)]
+
+    def _max_source_safe_power(self, source_id: Optional[str]) -> Optional[float]:
+        if not source_id:
+            return None
+        sinks = [b for b in self._scene.get_all_blocks() if isinstance(b, Sink)]
+        limits: List[float] = []
+        for sink in sinks:
+            blocks = self._path_blocks(source_id, sink.block_id)
+            if not blocks:
+                continue
+            cum_gain = 0.0
+            for b in blocks[1:]:
+                if b.comment_mode == "out":
+                    break
+                if b.max_input_power_dbm is not None:
+                    limits.append(b.max_input_power_dbm - cum_gain)
+                if b.comment_mode != "through":
+                    cum_gain += b.gain_db
+        if not limits:
+            return None
+        return min(limits)
+
+    def _update_metrics_panel(self) -> None:
+        source_id = self._metrics_panel.selected_source_id()
+        sink_id = self._metrics_panel.selected_sink_id()
+        path_blocks = self._path_blocks(source_id, sink_id)
+        effective = self._effective_blocks(path_blocks)
+        metrics = compute_cascade_metrics(effective) if effective else {}
+        source_item = self._scene.get_block_item(source_id) if source_id else None
+        sink_level = None
+        sink_snr = None
+        if source_item and effective:
+            src = source_item.block
+            if isinstance(src, Source):
+                sink_level = src.output_power_dbm + metrics.get("gain_db", 0.0)
+                if src.snr_db is not None and metrics.get("nf_db") is not None:
+                    sink_snr = src.snr_db - metrics["nf_db"]
+        self._metrics_panel.set_metrics(
+            sink_level=sink_level,
+            sink_snr=sink_snr,
+            max_source=self._max_source_safe_power(source_id),
+            p1db=metrics.get("p1db_in_dbm") if metrics else None,
+            ip3=metrics.get("iip3_dbm") if metrics else None,
+        )
 
     # ------------------------------------------------------------------ #
     # File I/O                                                             #

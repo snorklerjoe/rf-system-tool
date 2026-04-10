@@ -20,7 +20,7 @@ from rf_tool.engine.cascade import compute_cascade_metrics
 
 class TestJsonSerialisation:
     def _make_blocks(self):
-        src = Source(frequency=1e9, output_power_dbm=-10.0, label="TX")
+        src = Source(frequency=1e9, output_power_dbm=-10.0, snr_db=47.0, label="TX")
         amp = Amplifier(gain_db=20.0, nf_db=3.0, oip3_dbm=30.0, label="LNA")
         att = Attenuator(attenuation_db=6.0, label="6dB Pad")
         snk = Sink(label="RX")
@@ -95,6 +95,19 @@ class TestJsonSerialisation:
             assert loaded_amp.nf_db == pytest.approx(2.8)
             assert loaded_amp.oip3_dbm == pytest.approx(28.0)
             assert loaded_amp.label == "DUT"
+        finally:
+            os.unlink(path)
+
+    def test_load_restores_source_snr(self):
+        src = Source(frequency=1.2e9, output_power_dbm=-5.0, snr_db=41.0, label="SRC")
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w") as f:
+            path = f.name
+        try:
+            save_scene([src], [], filepath=path)
+            result = load_scene(path)
+            loaded_src = result["blocks"][0]
+            assert isinstance(loaded_src, Source)
+            assert loaded_src.snr_db == pytest.approx(41.0)
         finally:
             os.unlink(path)
 

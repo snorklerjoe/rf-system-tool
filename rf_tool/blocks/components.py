@@ -77,6 +77,7 @@ class Attenuator(RFBlock):
             min_input_power_dbm=d.get("min_input_power_dbm"),
             max_input_power_dbm=d.get("max_input_power_dbm"),
             spur_coefficients=d.get("spur_coefficients", []),
+            comment_mode=d.get("comment_mode", "active"),
         )
         return obj
 
@@ -178,6 +179,7 @@ class Mixer(RFBlock):
             min_input_power_dbm=d.get("min_input_power_dbm"),
             max_input_power_dbm=d.get("max_input_power_dbm"),
             spur_coefficients=d.get("spur_coefficients", []),
+            comment_mode=d.get("comment_mode", "active"),
         )
         return obj
 
@@ -263,6 +265,7 @@ class SparBlock(RFBlock):
             min_input_power_dbm=d.get("min_input_power_dbm"),
             max_input_power_dbm=d.get("max_input_power_dbm"),
             spur_coefficients=d.get("spur_coefficients", []),
+            comment_mode=d.get("comment_mode", "active"),
         )
         return obj
 
@@ -336,6 +339,7 @@ class TransferFnBlock(RFBlock):
             min_input_power_dbm=d.get("min_input_power_dbm"),
             max_input_power_dbm=d.get("max_input_power_dbm"),
             spur_coefficients=d.get("spur_coefficients", []),
+            comment_mode=d.get("comment_mode", "active"),
         )
         return obj
 
@@ -405,6 +409,7 @@ class LowPassFilter(RFBlock):
             min_input_power_dbm=d.get("min_input_power_dbm"),
             max_input_power_dbm=d.get("max_input_power_dbm"),
             spur_coefficients=d.get("spur_coefficients", []),
+            comment_mode=d.get("comment_mode", "active"),
         )
         return obj
 
@@ -458,6 +463,7 @@ class HighPassFilter(RFBlock):
             min_input_power_dbm=d.get("min_input_power_dbm"),
             max_input_power_dbm=d.get("max_input_power_dbm"),
             spur_coefficients=d.get("spur_coefficients", []),
+            comment_mode=d.get("comment_mode", "active"),
         )
         return obj
 
@@ -487,6 +493,14 @@ class PowerSplitter(RFBlock):
         kwargs["gain_db"] = split_loss_db
         kwargs.setdefault("nf_db", abs(split_loss_db))
         super().__init__(**kwargs)
+
+    def set_n_ways(self, n_ways: int) -> None:
+        """Update split/combine ways and rebuild dynamic ports and loss settings."""
+        self.n_ways = max(2, n_ways)
+        split_loss_db = -10.0 * math.log10(self.n_ways)
+        self.gain_db = split_loss_db
+        self.nf_db = abs(split_loss_db)
+        self._setup_ports()
 
     def _setup_ports(self) -> None:
         if self.is_combiner:
@@ -524,6 +538,37 @@ class PowerSplitter(RFBlock):
             min_input_power_dbm=d.get("min_input_power_dbm"),
             max_input_power_dbm=d.get("max_input_power_dbm"),
             spur_coefficients=d.get("spur_coefficients", []),
+            comment_mode=d.get("comment_mode", "active"),
+        )
+        return obj
+
+
+class PowerCombiner(PowerSplitter):
+    """Dedicated N-way power combiner block."""
+
+    BLOCK_TYPE = "PowerCombiner"
+
+    def __init__(self, n_ways: int = 2, **kwargs):
+        kwargs.setdefault("label", f"{max(2, n_ways)}-way Combiner")
+        kwargs.setdefault("color", "#8C8CFF")
+        super().__init__(n_ways=n_ways, is_combiner=True, **kwargs)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "PowerCombiner":
+        obj = cls(
+            n_ways=d.get("n_ways", 2),
+            block_id=d.get("block_id"),
+            label=d.get("label", "2-way Combiner"),
+            x=d.get("x", 0.0),
+            y=d.get("y", 0.0),
+            color=d.get("color", "#8C8CFF"),
+            nf_db=d.get("nf_db", 3.01),
+            p1db_dbm=d.get("p1db_dbm"),
+            oip3_dbm=d.get("oip3_dbm"),
+            min_input_power_dbm=d.get("min_input_power_dbm"),
+            max_input_power_dbm=d.get("max_input_power_dbm"),
+            spur_coefficients=d.get("spur_coefficients", []),
+            comment_mode=d.get("comment_mode", "active"),
         )
         return obj
 
@@ -617,6 +662,7 @@ class Switch(RFBlock):
             min_input_power_dbm=d.get("min_input_power_dbm"),
             max_input_power_dbm=d.get("max_input_power_dbm"),
             spur_coefficients=d.get("spur_coefficients", []),
+            comment_mode=d.get("comment_mode", "active"),
         )
         return obj
 
@@ -638,10 +684,12 @@ class Source(RFBlock):
         self,
         frequency: float = 1e9,
         output_power_dbm: float = 0.0,
+        snr_db: Optional[float] = None,
         **kwargs,
     ):
         self.frequency: float = frequency
         self.output_power_dbm: float = output_power_dbm
+        self.snr_db: Optional[float] = snr_db
         kwargs.setdefault("label", "Source")
         kwargs.setdefault("color", "#33CC33")
         kwargs["gain_db"] = 0.0
@@ -657,6 +705,7 @@ class Source(RFBlock):
         return Signal(
             carrier_frequency=self.frequency,
             power_dbm=self.output_power_dbm,
+            snr_db=self.snr_db,
         )
 
     def process(self, signal=None, port_name: str = "OUT") -> Dict[str, Signal]:
@@ -666,6 +715,7 @@ class Source(RFBlock):
         d = super().to_dict()
         d["frequency"] = self.frequency
         d["output_power_dbm"] = self.output_power_dbm
+        d["snr_db"] = self.snr_db
         return d
 
     @classmethod
@@ -673,6 +723,7 @@ class Source(RFBlock):
         obj = cls(
             frequency=d.get("frequency", 1e9),
             output_power_dbm=d.get("output_power_dbm", 0.0),
+            snr_db=d.get("snr_db"),
             block_id=d.get("block_id"),
             label=d.get("label", "Source"),
             x=d.get("x", 0.0),
@@ -680,6 +731,7 @@ class Source(RFBlock):
             color=d.get("color", "#33CC33"),
             min_input_power_dbm=d.get("min_input_power_dbm"),
             max_input_power_dbm=d.get("max_input_power_dbm"),
+            comment_mode=d.get("comment_mode", "active"),
         )
         return obj
 
@@ -724,6 +776,7 @@ class Sink(RFBlock):
             color=d.get("color", "#CC3333"),
             min_input_power_dbm=d.get("min_input_power_dbm"),
             max_input_power_dbm=d.get("max_input_power_dbm"),
+            comment_mode=d.get("comment_mode", "active"),
         )
         return obj
 
@@ -742,6 +795,7 @@ BLOCK_REGISTRY: Dict[str, type] = {
     "LowPassFilter": LowPassFilter,
     "HighPassFilter": HighPassFilter,
     "PowerSplitter": PowerSplitter,
+    "PowerCombiner": PowerCombiner,
     "Switch": Switch,
     "Source": Source,
     "Sink": Sink,

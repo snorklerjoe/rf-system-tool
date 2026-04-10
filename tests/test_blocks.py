@@ -26,7 +26,7 @@ from rf_tool.models.signal import Signal, SpurTone
 from rf_tool.models.rf_block import RFBlock, Port
 from rf_tool.blocks.components import (
     Amplifier, Attenuator, Mixer, SparBlock, TransferFnBlock,
-    LowPassFilter, HighPassFilter, PowerSplitter, Switch, Source, Sink,
+    LowPassFilter, HighPassFilter, PowerSplitter, PowerCombiner, Switch, Source, Sink,
     BLOCK_REGISTRY, block_from_dict,
 )
 
@@ -123,6 +123,7 @@ class TestRFBlock:
             p1db_dbm=20.0, oip3_dbm=30.0,
             min_input_power_dbm=-30.0, max_input_power_dbm=10.0,
             spur_coefficients=[{"m": 2, "n": 0, "rel_power_db": -30.0}],
+            comment_mode="through",
         )
         b2 = RFBlock.from_dict(b.to_dict())
         assert b2.label == "Test"
@@ -131,6 +132,7 @@ class TestRFBlock:
         assert b2.nf_db == pytest.approx(3.0)
         assert b2.oip3_dbm == pytest.approx(30.0)
         assert len(b2.spur_coefficients) == 1
+        assert b2.comment_mode == "through"
 
 
 # ======================================================================= #
@@ -491,6 +493,24 @@ class TestPowerSplitter:
         assert s2.n_ways == 3
         assert s2.is_combiner is False
 
+    def test_set_n_ways_updates_ports(self):
+        s = PowerSplitter(n_ways=2)
+        s.set_n_ways(5)
+        assert len(s.output_ports) == 5
+
+
+class TestPowerCombiner:
+    def test_default_is_two_way_combiner(self):
+        c = PowerCombiner()
+        assert c.is_combiner is True
+        assert len(c.input_ports) == 2
+        assert len(c.output_ports) == 1
+
+    def test_round_trip(self):
+        c = PowerCombiner(n_ways=4)
+        c2 = PowerCombiner.from_dict(c.to_dict())
+        assert c2.n_ways == 4
+
 
 # ======================================================================= #
 # Switch                                                                   #
@@ -557,10 +577,11 @@ class TestSource:
         assert s.output_ports[0].name == "OUT"
 
     def test_generate_frequency_and_power(self):
-        s = Source(frequency=2.4e9, output_power_dbm=-10.0)
+        s = Source(frequency=2.4e9, output_power_dbm=-10.0, snr_db=55.0)
         sig = s.generate()
         assert sig.carrier_frequency == pytest.approx(2.4e9)
         assert sig.power_dbm == pytest.approx(-10.0)
+        assert sig.snr_db == pytest.approx(55.0)
 
     def test_generate_has_no_spurs(self):
         s = Source(frequency=1e9, output_power_dbm=0.0)
@@ -574,10 +595,11 @@ class TestSource:
         assert out["OUT"].power_dbm == pytest.approx(5.0)
 
     def test_round_trip(self):
-        s = Source(frequency=5.8e9, output_power_dbm=-5.0)
+        s = Source(frequency=5.8e9, output_power_dbm=-5.0, snr_db=44.0)
         s2 = Source.from_dict(s.to_dict())
         assert s2.frequency == pytest.approx(5.8e9)
         assert s2.output_power_dbm == pytest.approx(-5.0)
+        assert s2.snr_db == pytest.approx(44.0)
 
 
 # ======================================================================= #
@@ -636,6 +658,7 @@ class TestBlockRegistry:
         ("LowPassFilter",  LowPassFilter),
         ("HighPassFilter", HighPassFilter),
         ("PowerSplitter",  PowerSplitter),
+        ("PowerCombiner",  PowerCombiner),
         ("Switch",         Switch),
         ("Source",         Source),
         ("Sink",           Sink),
@@ -665,7 +688,7 @@ class TestBlockRegistry:
         blocks = [
             Amplifier(), Attenuator(), Mixer(), SparBlock(),
             TransferFnBlock(), LowPassFilter(), HighPassFilter(),
-            PowerSplitter(), Switch(), Source(), Sink(),
+            PowerSplitter(), PowerCombiner(), Switch(), Source(), Sink(),
         ]
         for orig in blocks:
             restored = block_from_dict(orig.to_dict())

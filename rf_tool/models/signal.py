@@ -41,11 +41,14 @@ class Signal:
         Spurious tones (frequency and power).
     phase_noise_dbc_hz : dict, optional
         Phase noise profile: offset_freq_hz -> dBc/Hz.
+    snr_db : float or None
+        Signal-to-noise ratio carried with this signal.
     """
     carrier_frequency: float          # Hz
     power_dbm: float                  # dBm
     spurs: List[SpurTone] = field(default_factory=list)
     phase_noise_dbc_hz: Dict[float, float] = field(default_factory=dict)
+    snr_db: Optional[float] = None
 
     # ------------------------------------------------------------------ #
     # Factory / copy helpers                                               #
@@ -57,6 +60,7 @@ class Signal:
             power_dbm=self.power_dbm,
             spurs=[SpurTone(s.frequency, s.power_dbm) for s in self.spurs],
             phase_noise_dbc_hz=dict(self.phase_noise_dbc_hz),
+            snr_db=self.snr_db,
         )
 
     # ------------------------------------------------------------------ #
@@ -86,6 +90,7 @@ class Signal:
             "power_dbm": self.power_dbm,
             "spurs": [s.to_dict() for s in self.spurs],
             "phase_noise_dbc_hz": {str(k): v for k, v in self.phase_noise_dbc_hz.items()},
+            "snr_db": self.snr_db,
         }
 
     @classmethod
@@ -95,6 +100,7 @@ class Signal:
             power_dbm=d["power_dbm"],
             spurs=[SpurTone.from_dict(s) for s in d.get("spurs", [])],
             phase_noise_dbc_hz={float(k): v for k, v in d.get("phase_noise_dbc_hz", {}).items()},
+            snr_db=d.get("snr_db"),
         )
 
     def __repr__(self) -> str:

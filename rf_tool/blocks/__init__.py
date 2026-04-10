@@ -7,6 +7,7 @@ from rf_tool.blocks.components import (
     LowPassFilter,
     HighPassFilter,
     PowerSplitter,
+    PowerCombiner,
     Switch,
     Source,
     Sink,
