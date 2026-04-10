@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "rf-system-tool"
+version = "0.1.0"
+description = "RF System Cascade Analysis and Visualization Tool"
+readme = "README.md"
+license = {file = "LICENSE"}
+requires-python = ">=3.10"
+dependencies = [
+    "PySide6>=6.5",
+    "scikit-rf>=1.0",
+    "scipy>=1.10",
+    "pyqtgraph>=0.13",
+    "numpy>=1.24",
+]
+
+[project.scripts]
+rf-system-tool = "rf_tool.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["rf_tool*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
