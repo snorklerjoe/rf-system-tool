@@ -1,0 +1,168 @@
+{
+  "version": "1",
+  "metadata": {},
+  "blocks": [
+    {
+      "block_type": "Source",
+      "block_id": "5ae4cc3f-148c-4601-bb0b-da497184b9af",
+      "label": "Source",
+      "x": 276.490439026119,
+      "y": -507.77234093790184,
+      "color": "#33CC33",
+      "gain_db": 0.0,
+      "nf_db": 0.0,
+      "p1db_dbm": null,
+      "oip3_dbm": null,
+      "min_input_power_dbm": null,
+      "max_input_power_dbm": null,
+      "spur_coefficients": [],
+      "comment_mode": "active",
+      "frequency": 1000000000.0,
+      "output_power_dbm": 0.0,
+      "snr_db": null
+    },
+    {
+      "block_type": "HighPassFilter",
+      "block_id": "660b61fc-488e-4fcb-93ff-d6c7223e0459",
+      "label": "HPF 3rd order",
+      "x": 418.6092065257403,
+      "y": -401.92083552151166,
+      "color": "#CC6600",
+      "gain_db": 0.0,
+      "nf_db": 5.0,
+      "p1db_dbm": null,
+      "oip3_dbm": null,
+      "min_input_power_dbm": null,
+      "max_input_power_dbm": null,
+      "spur_coefficients": [],
+      "comment_mode": "active",
+      "order": 3,
+      "cutoff_hz": 1000000000.0
+    },
+    {
+      "block_type": "LowPassFilter",
+      "block_id": "d511dc66-3b7e-4d88-a322-c4b97fd55057",
+      "label": "LPF 3rd order",
+      "x": 722.4011643451054,
+      "y": -371.6703083861039,
+      "color": "#009999",
+      "gain_db": 0.0,
+      "nf_db": 0.0,
+      "p1db_dbm": null,
+      "oip3_dbm": null,
+      "min_input_power_dbm": null,
+      "max_input_power_dbm": null,
+      "spur_coefficients": [],
+      "comment_mode": "active",
+      "order": 3,
+      "cutoff_hz": 1000000000.0
+    },
+    {
+      "block_type": "Amplifier",
+      "block_id": "0092d572-2b05-4c31-bd08-b7b8680691d9",
+      "label": "Amp",
+      "x": 696.9441176669145,
+      "y": -224.70814303079487,
+      "color": "#3A7BD5",
+      "gain_db": 15.0,
+      "nf_db": 13.0,
+      "p1db_dbm": 20.0,
+      "oip3_dbm": 30.0,
+      "min_input_power_dbm": null,
+      "max_input_power_dbm": 10.0,
+      "spur_coefficients": [],
+      "comment_mode": "through"
+    },
+    {
+      "block_type": "Switch",
+      "block_id": "6a736865-8fba-4c58-bb43-f4fe24326dea",
+      "label": "SW 1x2",
+      "x": 525.1787221650677,
+      "y": -282.20231918406216,
+      "color": "#DD4444",
+      "gain_db": -0.5,
+      "nf_db": 0.5,
+      "p1db_dbm": null,
+      "oip3_dbm": null,
+      "min_input_power_dbm": null,
+      "max_input_power_dbm": null,
+      "spur_coefficients": [],
+      "comment_mode": "active",
+      "topology": "1x2",
+      "active_port": 1,
+      "insertion_loss_db": 0.5,
+      "isolation_db": 40.0
+    },
+    {
+      "block_type": "Sink",
+      "block_id": "4ba5b9bd-d01e-4183-bd03-df7b11b323be",
+      "label": "Sink",
+      "x": 867.9167728205812,
+      "y": -561.6426932638734,
+      "color": "#CC3333",
+      "gain_db": 0.0,
+      "nf_db": 0.0,
+      "p1db_dbm": null,
+      "oip3_dbm": null,
+      "min_input_power_dbm": null,
+      "max_input_power_dbm": null,
+      "spur_coefficients": [],
+      "comment_mode": "active"
+    },
+    {
+      "block_type": "Sink",
+      "block_id": "0d7a2695-55bc-463c-a178-98e45b923ab2",
+      "label": "Sink2",
+      "x": 850.9167728205812,
+      "y": -200.6426932638734,
+      "color": "#CC3333",
+      "gain_db": 0.0,
+      "nf_db": 0.0,
+      "p1db_dbm": null,
+      "oip3_dbm": null,
+      "min_input_power_dbm": null,
+      "max_input_power_dbm": null,
+      "spur_coefficients": [],
+      "comment_mode": "active"
+    }
+  ],
+  "connections": [
+    {
+      "src_block_id": "5ae4cc3f-148c-4601-bb0b-da497184b9af",
+      "src_port": "OUT",
+      "dst_block_id": "660b61fc-488e-4fcb-93ff-d6c7223e0459",
+      "dst_port": "IN"
+    },
+    {
+      "src_block_id": "660b61fc-488e-4fcb-93ff-d6c7223e0459",
+      "src_port": "OUT",
+      "dst_block_id": "6a736865-8fba-4c58-bb43-f4fe24326dea",
+      "dst_port": "IN"
+    },
+    {
+      "src_block_id": "6a736865-8fba-4c58-bb43-f4fe24326dea",
+      "src_port": "OUT0",
+      "dst_block_id": "d511dc66-3b7e-4d88-a322-c4b97fd55057",
+      "dst_port": "IN"
+    },
+    {
+      "src_block_id": "6a736865-8fba-4c58-bb43-f4fe24326dea",
+      "src_port": "OUT1",
+      "dst_block_id": "0092d572-2b05-4c31-bd08-b7b8680691d9",
+      "dst_port": "IN"
+    },
+    {
+      "src_block_id": "d511dc66-3b7e-4d88-a322-c4b97fd55057",
+      "src_port": "OUT",
+      "dst_block_id": "4ba5b9bd-d01e-4183-bd03-df7b11b323be",
+      "dst_port": "IN"
+    },
+    {
+      "src_block_id": "0092d572-2b05-4c31-bd08-b7b8680691d9",
+      "src_port": "OUT",
+      "dst_block_id": "0d7a2695-55bc-463c-a178-98e45b923ab2",
+      "dst_port": "IN"
+    }
+  ],
+  "annotations": []
+}

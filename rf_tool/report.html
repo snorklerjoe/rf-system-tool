@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>RF System Cascade Report</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 40px; color: #222; }
+    h1 { color: #2255AA; }
+    h2 { color: #445577; border-bottom: 1px solid #ccc; padding-bottom: 4px; }
+    table { border-collapse: collapse; width: 100%; margin-bottom: 24px; }
+    th { background: #2255AA; color: white; padding: 6px 10px; text-align: left; }
+    td { border: 1px solid #ccc; padding: 5px 10px; }
+    tr:nth-child(even) { background: #f4f7ff; }
+    .summary { background: #eef4ff; border: 1px solid #aabbdd; padding: 12px 20px;
+               border-radius: 4px; margin-bottom: 24px; }
+    .summary table { margin: 0; }
+    .summary td { border: none; padding: 3px 10px; }
+  </style>
+</head>
+<body>
+  <h1>RF System Cascade Report</h1>
+
+  <div class="summary">
+    <h2>System Summary</h2>
+    <table>
+      <tr><td><b>Total Gain</b></td><td>14.50 dB</td></tr>
+      <tr><td><b>Cascaded NF</b></td><td>13.45 dB</td></tr>
+      <tr><td><b>System IIP3</b></td><td>15.0 dBm</td></tr>
+      <tr><td><b>System OIP3</b></td><td>29.5 dBm</td></tr>
+      <tr><td><b>Input P1dB</b></td><td>5.0 dBm</td></tr>
+      <tr><td><b>Min Damage Level (at input)</b></td><td>10.0 dBm</td></tr>
+    </table>
+  </div>
+
+  <h2>Stage-by-Stage Analysis</h2>
+  <table>
+    <tr>
+      <th>#</th><th>Block Type</th><th>Label</th>
+      <th>Gain (dB)</th><th>NF (dB)</th>
+      <th>Cum. Gain (dB)</th>
+      <th>P1dB out (dBm)</th><th>OIP3 (dBm)</th>
+      <th>Max Input (dBm)</th>
+    </tr>
+    <tr><td>1</td><td>Source</td><td>Source</td><td>0.00</td><td>0.00</td><td>0.00</td><td>N/A</td><td>N/A</td><td>N/A</td></tr>
+    <tr><td>2</td><td>HighPassFilter</td><td>HPF 3rd order</td><td>0.00</td><td>5.00</td><td>0.00</td><td>N/A</td><td>N/A</td><td>N/A</td></tr>
+    <tr><td>3</td><td>LowPassFilter</td><td>LPF 3rd order</td><td>0.00</td><td>0.00</td><td>0.00</td><td>N/A</td><td>N/A</td><td>N/A</td></tr>
+    <tr><td>4</td><td>Amplifier</td><td>Amp</td><td>15.00</td><td>13.00</td><td>15.00</td><td>20.0</td><td>30.0</td><td>10.0</td></tr>
+    <tr><td>5</td><td>Switch</td><td>SW 1x2</td><td>-0.50</td><td>0.50</td><td>14.50</td><td>N/A</td><td>N/A</td><td>N/A</td></tr>
+    <tr><td>6</td><td>Sink</td><td>Sink</td><td>0.00</td><td>0.00</td><td>14.50</td><td>N/A</td><td>N/A</td><td>N/A</td></tr>
+    <tr><td>7</td><td>Sink</td><td>Sink2</td><td>0.00</td><td>0.00</td><td>14.50</td><td>N/A</td><td>N/A</td><td>N/A</td></tr>
+  </table>
+</body>
+</html>

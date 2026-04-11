@@ -81,6 +81,24 @@ class WireItem(QGraphicsPathItem):
         font.setBold(color == QColor("#FF3333"))
         self._label.setFont(font)
 
+    def mousePressEvent(self, event) -> None:
+        """Handle mouse click on wire."""
+        super().mousePressEvent(event)
+        # The scene will handle the selection state
+        
+    def itemChange(self, change, value):
+        """Update visual state when selection changes."""
+        if change == QGraphicsItem.ItemSelectedChange:
+            if value:
+                # Wire is now selected - make it more visible
+                self.setPen(QPen(QColor("#FFFF00"), 3.5, Qt.SolidLine,
+                               Qt.RoundCap, Qt.RoundJoin))
+            else:
+                # Wire is now deselected - return to normal
+                self.setPen(QPen(QColor("#00CCFF"), 2.0, Qt.SolidLine,
+                               Qt.RoundCap, Qt.RoundJoin))
+        return super().itemChange(change, value)
+
 
 class TempWireItem(QGraphicsPathItem):
     """Temporary wire drawn while the user is dragging a connection."""
@@ -118,6 +136,7 @@ class RFScene(QGraphicsScene):
     connection_removed = Signal(str, str, str, str)
     block_selected = Signal(str)                     # block_id
     block_double_clicked = Signal(str)
+    wire_selected = Signal(str, str, str, str)       # src_bid, src_port, dst_bid, dst_port
     scene_changed = Signal()
 
     def __init__(self, parent=None):
@@ -137,6 +156,9 @@ class RFScene(QGraphicsScene):
         # P2P selection
         self._p2p_start: Optional[str] = None
         self._p2p_end: Optional[str] = None
+        
+        # Connect selection changes
+        self.selectionChanged.connect(self._on_selection_changed)
 
     # ------------------------------------------------------------------ #
     # Block management                                                     #
@@ -183,6 +205,15 @@ class RFScene(QGraphicsScene):
         for item in self.items():
             if isinstance(item, (BlockItem, AnnotationItem, WireItem)):
                 item.setSelected(True)
+
+    def _on_selection_changed(self) -> None:
+        """Handle selection changes - emit wire_selected signal when a wire is selected."""
+        selected_wires = [item for item in self.selectedItems() if isinstance(item, WireItem)]
+        if len(selected_wires) == 1:
+            wire = selected_wires[0]
+            src_bid = wire.src_port.parentItem().block.block_id
+            dst_bid = wire.dst_port.parentItem().block.block_id
+            self.wire_selected.emit(src_bid, wire.src_port.port.name, dst_bid, wire.dst_port.port.name)
 
     def rebuild_block_ports(self, block_id: str) -> None:
         item = self._block_items.get(block_id)

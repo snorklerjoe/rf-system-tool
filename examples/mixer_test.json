@@ -1,0 +1,132 @@
+{
+  "version": "1",
+  "metadata": {},
+  "blocks": [
+    {
+      "block_type": "Source",
+      "block_id": "c850bb6e-d386-4935-aa1a-0288bb98c0fe",
+      "label": "IF",
+      "x": 121.57460588499566,
+      "y": 46.936465676963934,
+      "color": "#33CC33",
+      "gain_db": 0.0,
+      "nf_db": 0.0,
+      "p1db_dbm": null,
+      "oip3_dbm": null,
+      "min_input_power_dbm": null,
+      "max_input_power_dbm": null,
+      "spur_coefficients": [],
+      "comment_mode": "active",
+      "frequency": 1000000000.0,
+      "output_power_dbm": 5.0,
+      "snr_db": 50.0
+    },
+    {
+      "block_type": "Source",
+      "block_id": "e34bcaf3-9af1-4512-801a-93737f3b4a78",
+      "label": "RF",
+      "x": -41.722436141980666,
+      "y": -149.80995920469297,
+      "color": "#cc6826",
+      "gain_db": 0.0,
+      "nf_db": 0.0,
+      "p1db_dbm": null,
+      "oip3_dbm": null,
+      "min_input_power_dbm": null,
+      "max_input_power_dbm": null,
+      "spur_coefficients": [],
+      "comment_mode": "active",
+      "frequency": 1100000000.0,
+      "output_power_dbm": 0.0,
+      "snr_db": 20.0
+    },
+    {
+      "block_type": "Mixer",
+      "block_id": "02fc46ef-03df-4b7f-b444-1887ff3afae8",
+      "label": "Mixer",
+      "x": 295.3006550050443,
+      "y": -146.0107397190818,
+      "color": "#E8A838",
+      "gain_db": -7.0,
+      "nf_db": 7.0,
+      "p1db_dbm": null,
+      "oip3_dbm": null,
+      "min_input_power_dbm": null,
+      "max_input_power_dbm": null,
+      "spur_coefficients": [],
+      "comment_mode": "active",
+      "lo_frequency": 1000000000.0,
+      "conversion_expressions": [
+        "RF-LO"
+      ]
+    },
+    {
+      "block_type": "Amplifier",
+      "block_id": "875267f7-a227-4068-897a-2d2cb82b1922",
+      "label": "Amp",
+      "x": 117.36545422283439,
+      "y": -146.49671296817803,
+      "color": "#3A7BD5",
+      "gain_db": 15.0,
+      "nf_db": 3.0,
+      "p1db_dbm": 20.0,
+      "oip3_dbm": 30.0,
+      "min_input_power_dbm": null,
+      "max_input_power_dbm": null,
+      "spur_coefficients": [],
+      "comment_mode": "active"
+    },
+    {
+      "block_type": "Sink",
+      "block_id": "c9e616b5-ecb0-471b-8aa8-70203cc3dfcc",
+      "label": "Sink",
+      "x": 555.536746841587,
+      "y": -107.27441603061521,
+      "color": "#CC3333",
+      "gain_db": 0.0,
+      "nf_db": 0.0,
+      "p1db_dbm": null,
+      "oip3_dbm": null,
+      "min_input_power_dbm": null,
+      "max_input_power_dbm": null,
+      "spur_coefficients": [],
+      "comment_mode": "active"
+    }
+  ],
+  "connections": [
+    {
+      "src_block_id": "e34bcaf3-9af1-4512-801a-93737f3b4a78",
+      "src_port": "OUT",
+      "dst_block_id": "875267f7-a227-4068-897a-2d2cb82b1922",
+      "dst_port": "IN"
+    },
+    {
+      "src_block_id": "875267f7-a227-4068-897a-2d2cb82b1922",
+      "src_port": "OUT",
+      "dst_block_id": "02fc46ef-03df-4b7f-b444-1887ff3afae8",
+      "dst_port": "RF"
+    },
+    {
+      "src_block_id": "c850bb6e-d386-4935-aa1a-0288bb98c0fe",
+      "src_port": "OUT",
+      "dst_block_id": "02fc46ef-03df-4b7f-b444-1887ff3afae8",
+      "dst_port": "LO"
+    },
+    {
+      "src_block_id": "02fc46ef-03df-4b7f-b444-1887ff3afae8",
+      "src_port": "IF",
+      "dst_block_id": "c9e616b5-ecb0-471b-8aa8-70203cc3dfcc",
+      "dst_port": "IN"
+    }
+  ],
+  "annotations": [
+    {
+      "text": "This is a simple example of a mixer!",
+      "x": 222.33770687934935,
+      "y": -243.6959521820238,
+      "font": "Arial",
+      "font_size": 10,
+      "color": "#ffffff"
+    }
+  ]
+}

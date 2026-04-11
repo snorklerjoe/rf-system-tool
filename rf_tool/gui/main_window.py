@@ -18,6 +18,10 @@ from PySide6.QtCore import Qt, QPointF
 from rf_tool.gui.canvas import RFScene, RFCanvasView, WireItem
 from rf_tool.gui.node_items import BlockItem, AnnotationItem
 from rf_tool.gui.dialogs import PropertiesPanel, CascadeReadoutDialog, SourceSinkMetricsPanel
+from rf_tool.plots.plot_windows import (
+    SpectrumPlot, ActualSpectrumPlot, GainNFPlot, FrequencyResponseView,
+    FrequencyComponentEditor, compute_frequency_sweep,
+)
 from rf_tool.blocks.components import (
     Amplifier, Attenuator, Mixer, SparBlock, TransferFnBlock,
     LowPassFilter, HighPassFilter, PowerSplitter, PowerCombiner, Switch, Source, Sink,
@@ -52,7 +56,11 @@ class MainWindow(QMainWindow):
         self._scene.block_selected.connect(self._on_block_selected)
         self._scene.block_double_clicked.connect(self._on_block_double_clicked)
         self._scene.scene_changed.connect(self._on_scene_changed)
+        self._scene.wire_selected.connect(self._on_wire_selected)
         self._refresh_metrics_block_lists()
+        
+        # Spectrum viewer
+        self._spectrum_plot: Optional[ActualSpectrumPlot] = None
 
     # ------------------------------------------------------------------ #
     # Setup                                                                #
@@ -221,8 +229,15 @@ class MainWindow(QMainWindow):
         act_freq.triggered.connect(self._run_freq_plot)
         act_prop = QAction("&Propagate Signals", self)
         act_prop.triggered.connect(self._propagate_signals)
+        act_spectrum = QAction("&Signal Spectrum Viewer…", self)
+        act_spectrum.triggered.connect(self._open_spectrum_viewer)
+        act_freq_response = QAction("Frequency &Response…", self)
+        act_freq_response.triggered.connect(self._open_frequency_response)
         analysis_menu.addAction(act_p2p)
         analysis_menu.addAction(act_freq)
+        analysis_menu.addSeparator()
+        analysis_menu.addAction(act_spectrum)
+        analysis_menu.addAction(act_freq_response)
         analysis_menu.addSeparator()
         analysis_menu.addAction(act_prop)
 
@@ -426,13 +441,99 @@ class MainWindow(QMainWindow):
         item = self._scene.get_block_item(block_id)
         if item is None:
             return
-        from rf_tool.blocks.components import Sink, Switch
+        from rf_tool.blocks.components import Sink, Switch, Amplifier, Mixer
         if isinstance(item.block, Sink):
             self._scene.propagate_signals()
             if item.block.last_signal:
                 self._open_spectrum(item.block)
+        elif isinstance(item.block, (Amplifier, Mixer)):
+            # Open frequency component editor
+            dlg = FrequencyComponentEditor(item.block, self)
+            dlg.exec()
         elif isinstance(item.block, Switch):
             item.update()  # toggle already done in SwitchItem.mouseDoubleClickEvent
+
+    def _on_wire_selected(self, src_bid: str, src_port: str, dst_bid: str, dst_port: str) -> None:
+        """Handle wire selection - show its spectrum in the persistent viewer."""
+        # Propagate signals first to get the latest signal state
+        signals_at = self._scene.propagate_signals()
+        
+        # Get the destination signal
+        if dst_bid not in signals_at or dst_port not in signals_at[dst_bid]:
+            return
+        
+        signal = signals_at[dst_bid][dst_port]
+        
+        # Get block labels for display
+        src_item = self._scene.get_block_item(src_bid)
+        dst_item = self._scene.get_block_item(dst_bid)
+        src_label = src_item.block.label if src_item else "Source"
+        dst_label = dst_item.block.label if dst_item else "Dest"
+        
+        # Show spectrum in persistent viewer
+        if self._spectrum_plot is None:
+            self._spectrum_plot = ActualSpectrumPlot(None)
+            self._spectrum_plot.setAttribute(Qt.WA_DeleteOnClose, False)
+        
+        self._spectrum_plot.set_signal_from_wire(signal, src_label, dst_label, dst_port)
+        self._spectrum_plot.show()
+        self._spectrum_plot.raise_()
+        self._spectrum_plot.activateWindow()
+
+    def _open_spectrum_viewer(self) -> None:
+        """Open the persistent signal spectrum viewer."""
+        if self._spectrum_plot is None:
+            self._spectrum_plot = ActualSpectrumPlot(None)
+            self._spectrum_plot.setAttribute(Qt.WA_DeleteOnClose, False)
+        self._spectrum_plot.show()
+        self._spectrum_plot.raise_()
+        self._spectrum_plot.activateWindow()
+        self._status.showMessage("Signal Spectrum Viewer opened - click on wires to show their spectra")
+
+    def _open_frequency_response(self) -> None:
+        """Open frequency response viewer with source/sink selection."""
+        blocks = self._scene.get_all_blocks()
+        if not blocks:
+            QMessageBox.information(self, "Frequency Response", "Add blocks first.")
+            return
+        
+        from rf_tool.blocks.components import Source, Sink
+        src_rows = [(f"{b.BLOCK_TYPE}: {b.label}", b.block_id) for b in blocks if isinstance(b, Source)]
+        sink_rows = [(f"{b.BLOCK_TYPE}: {b.label}", b.block_id) for b in blocks if isinstance(b, Sink)]
+        
+        if not src_rows or not sink_rows:
+            QMessageBox.information(self, "Frequency Response", "Add at least one Source and one Sink.")
+            return
+        
+        win = FrequencyResponseView(None)
+        win.set_sources_and_sinks(src_rows, sink_rows)
+        
+        # Define update callback
+        def update_freq_response():
+            src_id = win.get_selected_source_id()
+            sink_id = win.get_selected_sink_id()
+            if src_id and sink_id:
+                path_blocks = self._path_blocks(src_id, sink_id)
+                if path_blocks:
+                    eff = self._effective_blocks(path_blocks)
+                    data = compute_frequency_sweep(eff)
+                    metrics = compute_cascade_metrics(eff)
+                    win.set_data(
+                        freq_hz=data["freq_hz"],
+                        gain_db=data["gain_db"],
+                        nf_db=data["nf_db"],
+                        p1db_dbm=metrics.get("p1db_in_dbm"),
+                        oip3_dbm=metrics.get("oip3_dbm"),
+                    )
+        
+        win.set_on_selection_changed(update_freq_response)
+        update_freq_response()  # Initial update
+        
+        win.setAttribute(Qt.WA_DeleteOnClose, True)
+        win.show()
+        if not hasattr(self, "_plot_windows"):
+            self._plot_windows = []
+        self._plot_windows.append(win)
 
     # ------------------------------------------------------------------ #
     # P2P analysis                                                         #
