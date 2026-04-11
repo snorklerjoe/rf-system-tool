@@ -316,10 +316,11 @@ class PropertiesPanel(QWidget):
 class CascadeReadoutDialog(QDialog):
     """Floating dialog showing P2P cascade metrics."""
 
-    def __init__(self, metrics: dict, start_label: str, end_label: str, parent=None):
+    def __init__(self, metrics: dict, start_label: str, end_label: str,
+                 stage_labels: Optional[List[str]] = None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("P2P Cascade Analysis")
-        self.setMinimumWidth(350)
+        self.setMinimumWidth(420)
         layout = QVBoxLayout(self)
 
         layout.addWidget(QLabel(f"<b>From:</b> {start_label}  →  <b>To:</b> {end_label}"))
@@ -341,14 +342,18 @@ class CascadeReadoutDialog(QDialog):
             layout.addWidget(QLabel("<b>Stage Details:</b>"))
             text = QTextEdit()
             text.setReadOnly(True)
-            text.setMaximumHeight(140)
+            text.setMaximumHeight(200)
             rows = []
             for i, (g, nf, cg) in enumerate(zip(
                 metrics["stage_gains"],
                 metrics["stage_nfs"],
                 metrics["cumulative_gains"],
             )):
-                rows.append(f"Stage {i+1}: G={g:.1f} dB, NF={nf:.1f} dB, CumG={cg:.1f} dB")
+                if stage_labels and i < len(stage_labels):
+                    lbl = stage_labels[i]
+                else:
+                    lbl = f"Stage {i+1}"
+                rows.append(f"{lbl}: G={g:.1f} dB, NF={nf:.1f} dB, CumG={cg:.1f} dB")
             text.setPlainText("\n".join(rows))
             layout.addWidget(text)
 
