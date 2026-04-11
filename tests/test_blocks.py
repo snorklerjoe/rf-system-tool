@@ -216,22 +216,40 @@ class TestMixer:
 
     def test_down_conversion_frequency(self):
         """RF=2 GHz, LO=1.9 GHz -> IF=0.1 GHz"""
-        m = Mixer(lo_frequency=1.9e9, conversion_expressions=["RF-LO"])
-        sig = make_signal(fc=2e9, pwr=0.0)
-        out = m.process(sig)["IF"]
+        m = Mixer(conversion_expressions=["RF-LO"])
+        m.process(make_signal(fc=2e9, pwr=0.0), "RF")
+        out = m.process(make_signal(fc=1.9e9, pwr=0.0), "LO")["IF"]
         assert out.carrier_frequency == pytest.approx(1e8, rel=1e-9)
 
     def test_up_conversion_frequency(self):
-        m = Mixer(lo_frequency=1e9, conversion_expressions=["RF+LO"])
-        sig = make_signal(fc=100e6, pwr=0.0)
-        out = m.process(sig)["IF"]
+        m = Mixer(conversion_expressions=["RF+LO"])
+        m.process(make_signal(fc=100e6, pwr=0.0), "RF")
+        out = m.process(make_signal(fc=1e9, pwr=0.0), "LO")["IF"]
         assert out.carrier_frequency == pytest.approx(1.1e9, rel=1e-9)
 
     def test_conversion_loss_applied(self):
-        m = Mixer(gain_db=-7.0, lo_frequency=1e9)
-        sig = make_signal(fc=2e9, pwr=0.0)
-        out = m.process(sig)["IF"]
+        m = Mixer(gain_db=-7.0, conversion_expressions=["RF-LO"])
+        m.process(make_signal(fc=2e9, pwr=0.0), "RF")
+        out = m.process(make_signal(fc=1e9, pwr=0.0), "LO")["IF"]
         assert out.power_dbm == pytest.approx(-7.0)
+
+    def test_power_depends_on_rf_and_lo_levels(self):
+        m = Mixer(gain_db=-7.0, conversion_expressions=["RF-LO"])
+        m.process(make_signal(fc=2e9, pwr=-10.0), "RF")
+        out = m.process(make_signal(fc=1e9, pwr=5.0), "LO")["IF"]
+        assert out.power_dbm == pytest.approx(-12.0)
+
+    def test_uses_all_rf_lo_component_combinations(self):
+        m = Mixer(gain_db=0.0, conversion_expressions=["RF-LO"])
+        rf = make_signal(fc=2e9, pwr=0.0, spurs=[SpurTone(2.2e9, -20.0)])
+        lo = make_signal(fc=1e9, pwr=0.0, spurs=[SpurTone(1.1e9, -20.0)])
+        m.process(rf, "RF")
+        out = m.process(lo, "LO")["IF"]
+        freqs = [out.carrier_frequency] + [s.frequency for s in out.spurs]
+        assert any(abs(f - 1.0e9) < 1e-3 for f in freqs)   # 2.0 - 1.0
+        assert any(abs(f - 0.9e9) < 1e-3 for f in freqs)   # 2.0 - 1.1
+        assert any(abs(f - 1.2e9) < 1e-3 for f in freqs)   # 2.2 - 1.0
+        assert any(abs(f - 1.1e9) < 1e-3 for f in freqs)   # 2.2 - 1.1
 
     def test_eval_freq_expr_simple(self):
         assert Mixer._eval_freq_expr("RF-LO", 2e9, 1e9) == pytest.approx(1e9)
@@ -243,17 +261,17 @@ class TestMixer:
             Mixer._eval_freq_expr("__import__('os')", 1e9, 1e9)
 
     def test_spur_generation_in_mixer(self):
-        m = Mixer(lo_frequency=1e9, gain_db=0.0)
+        m = Mixer(gain_db=0.0)
         m.spur_coefficients = [{"m": 2, "n": 1, "rel_power_db": -30.0}]
-        sig = make_signal(fc=2e9, pwr=0.0)
-        out = m.process(sig)["IF"]
+        m.process(make_signal(fc=2e9, pwr=0.0), "RF")
+        out = m.process(make_signal(fc=1e9, pwr=0.0), "LO")["IF"]
         # Spur at 2*RF + 1*LO = 5 GHz  (m=2, n=1)
-        assert any(abs(s.frequency - 5e9) < 1e6 for s in out.spurs)
+        freqs = [out.carrier_frequency] + [s.frequency for s in out.spurs]
+        assert any(abs(f - 5e9) < 1e-3 for f in freqs)
 
     def test_round_trip(self):
-        m = Mixer(lo_frequency=2.4e9, conversion_expressions=["RF-LO"], gain_db=-6.0)
+        m = Mixer(conversion_expressions=["RF-LO"], gain_db=-6.0)
         m2 = Mixer.from_dict(m.to_dict())
-        assert m2.lo_frequency == pytest.approx(2.4e9)
         assert m2.conversion_expressions == ["RF-LO"]
         assert m2.gain_db == pytest.approx(-6.0)
 
@@ -739,9 +757,11 @@ class TestSignalChainPropagation:
 
     def test_mixer_down_converts_carrier(self):
         src = Source(frequency=2.45e9, output_power_dbm=0.0)
-        mix = Mixer(lo_frequency=2.4e9, conversion_expressions=["RF-LO"], gain_db=-7.0)
+        lo = Source(frequency=2.4e9, output_power_dbm=0.0)
+        mix = Mixer(conversion_expressions=["RF-LO"], gain_db=-7.0)
         sig = src.generate()
-        out = mix.process(sig)["IF"]
+        mix.process(sig, "RF")
+        out = mix.process(lo.generate(), "LO")["IF"]
         assert out.carrier_frequency == pytest.approx(50e6, rel=1e-6)
         assert out.power_dbm == pytest.approx(-7.0)
 

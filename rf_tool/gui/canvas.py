@@ -377,6 +377,13 @@ class RFScene(QGraphicsScene):
             return False
         if len(a.spurs) != len(b.spurs):
             return False
+        a_nf = a.get_noise_floor_dbm()
+        b_nf = b.get_noise_floor_dbm()
+        if not (a_nf is None and b_nf is None):
+            if (a_nf is None) != (b_nf is None):
+                return False
+            if abs(a_nf - b_nf) > POWER_EPSILON_DBM:
+                return False
         return True
 
     @staticmethod
@@ -396,19 +403,31 @@ class RFScene(QGraphicsScene):
                     break
             if not found:
                 out.spurs.append(spur)
-        existing_mw = 10.0 ** (existing.power_dbm / 10.0)
-        incoming_mw = 10.0 ** (incoming.power_dbm / 10.0)
-        if existing.snr_db is None:
-            out.snr_db = incoming.snr_db
-        elif incoming.snr_db is None:
-            out.snr_db = existing.snr_db
-        else:
-            # Assumes uncorrelated noise terms and equal measurement bandwidth.
-            noise_existing = existing_mw / (10.0 ** (existing.snr_db / 10.0))
-            noise_incoming = incoming_mw / (10.0 ** (incoming.snr_db / 10.0))
-            total_noise = noise_existing + noise_incoming
-            total_signal = existing_mw + incoming_mw
-            out.snr_db = 10.0 * math.log10(total_signal / max(total_noise, MIN_POWER_MW))
+        existing_nf = existing.get_noise_floor_dbm()
+        incoming_nf = incoming.get_noise_floor_dbm()
+        if existing_nf is None and incoming_nf is None:
+            if existing.snr_db is None:
+                out.snr_db = incoming.snr_db
+            elif incoming.snr_db is None:
+                out.snr_db = existing.snr_db
+            else:
+                existing_mw = 10.0 ** (existing.power_dbm / 10.0)
+                incoming_mw = 10.0 ** (incoming.power_dbm / 10.0)
+                noise_existing = existing_mw / (10.0 ** (existing.snr_db / 10.0))
+                noise_incoming = incoming_mw / (10.0 ** (incoming.snr_db / 10.0))
+                total_noise = noise_existing + noise_incoming
+                total_signal = existing_mw + incoming_mw
+                out.snr_db = 10.0 * math.log10(total_signal / max(total_noise, MIN_POWER_MW))
+            return out
+
+        noise_terms = []
+        if existing_nf is not None:
+            noise_terms.append(10.0 ** (existing_nf / 10.0))
+        if incoming_nf is not None:
+            noise_terms.append(10.0 ** (incoming_nf / 10.0))
+        total_noise_mw = sum(noise_terms)
+        out_noise_floor = 10.0 * math.log10(max(total_noise_mw, MIN_POWER_MW))
+        out.set_noise_floor_dbm(out_noise_floor)
         return out
 
     @staticmethod
@@ -491,10 +510,14 @@ class RFScene(QGraphicsScene):
                     result = {p.name: merged_in.copy() for p in dst_item.block.output_ports}
                 else:
                     result = dst_item.block.process(merged_in, dst_port)
-                    if merged_in.snr_db is not None:
-                        for out_sig in result.values():
-                            if out_sig.snr_db is None:
-                                out_sig.snr_db = merged_in.snr_db - max(0.0, dst_item.block.nf_db)
+                    for out_sig in result.values():
+                        in_noise_floor = merged_in.get_noise_floor_dbm()
+                        if in_noise_floor is not None:
+                            effective_gain = out_sig.power_dbm - merged_in.power_dbm
+                            out_noise_floor = in_noise_floor + effective_gain + max(0.0, dst_item.block.nf_db)
+                            out_sig.set_noise_floor_dbm(out_noise_floor)
+                        elif merged_in.snr_db is not None and out_sig.snr_db is None:
+                            out_sig.snr_db = merged_in.snr_db - max(0.0, dst_item.block.nf_db)
 
                 for out_port, out_sig in result.items():
                     prev_out = signals_at.setdefault(dst_bid, {}).get(out_port)

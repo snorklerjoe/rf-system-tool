@@ -7,6 +7,7 @@ and phase noise parameters through the RF signal chain.
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
+import math
 
 
 @dataclass
@@ -49,6 +50,7 @@ class Signal:
     spurs: List[SpurTone] = field(default_factory=list)
     phase_noise_dbc_hz: Dict[float, float] = field(default_factory=dict)
     snr_db: Optional[float] = None
+    noise_floor_dbm: Optional[float] = None
 
     # ------------------------------------------------------------------ #
     # Factory / copy helpers                                               #
@@ -61,6 +63,7 @@ class Signal:
             spurs=[SpurTone(s.frequency, s.power_dbm) for s in self.spurs],
             phase_noise_dbc_hz=dict(self.phase_noise_dbc_hz),
             snr_db=self.snr_db,
+            noise_floor_dbm=self.noise_floor_dbm,
         )
 
     # ------------------------------------------------------------------ #
@@ -71,7 +74,26 @@ class Signal:
         new_sig = self.copy()
         new_sig.power_dbm += gain_db
         new_sig.spurs = [s.scale_power(gain_db) for s in new_sig.spurs]
+        if new_sig.noise_floor_dbm is not None:
+            new_sig.noise_floor_dbm += gain_db
+        if new_sig.snr_db is None and new_sig.noise_floor_dbm is not None:
+            new_sig.snr_db = new_sig.power_dbm - new_sig.noise_floor_dbm
         return new_sig
+
+    def get_noise_floor_dbm(self) -> Optional[float]:
+        """Return explicit noise floor if present, else infer from carrier SNR."""
+        if self.noise_floor_dbm is not None:
+            return self.noise_floor_dbm
+        if self.snr_db is None:
+            return None
+        return self.power_dbm - self.snr_db
+
+    def set_noise_floor_dbm(self, noise_floor_dbm: Optional[float]) -> None:
+        """Set noise floor and keep SNR consistent with carrier power."""
+        self.noise_floor_dbm = noise_floor_dbm
+        if noise_floor_dbm is None:
+            return
+        self.snr_db = self.power_dbm - noise_floor_dbm if math.isfinite(noise_floor_dbm) else None
 
     def add_spur(self, frequency: float, power_dbm: float) -> None:
         """Add or update a spurious tone."""
@@ -91,6 +113,7 @@ class Signal:
             "spurs": [s.to_dict() for s in self.spurs],
             "phase_noise_dbc_hz": {str(k): v for k, v in self.phase_noise_dbc_hz.items()},
             "snr_db": self.snr_db,
+            "noise_floor_dbm": self.noise_floor_dbm,
         }
 
     @classmethod
@@ -101,6 +124,7 @@ class Signal:
             spurs=[SpurTone.from_dict(s) for s in d.get("spurs", [])],
             phase_noise_dbc_hz={float(k): v for k, v in d.get("phase_noise_dbc_hz", {}).items()},
             snr_db=d.get("snr_db"),
+            noise_floor_dbm=d.get("noise_floor_dbm"),
         )
 
     def __repr__(self) -> str:

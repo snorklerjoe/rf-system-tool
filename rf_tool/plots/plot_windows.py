@@ -9,6 +9,7 @@ FrequencyResponseView - Frequency response with source/sink selection
 from __future__ import annotations
 
 import math
+import logging
 from typing import List, Optional, Dict, Tuple, Any
 
 import numpy as np
@@ -25,6 +26,7 @@ from PySide6.QtGui import QColor
 import pyqtgraph as pg
 pg.setConfigOption("background", "k")
 pg.setConfigOption("foreground", "w")
+logger = logging.getLogger(__name__)
 
 
 # ======================================================================= #
@@ -72,15 +74,17 @@ class SpectrumPlot(QWidget):
         pw = signal.power_dbm
 
         # Collect all frequencies for auto-scaling
-        all_freqs = [fc] + [s.frequency for s in signal.spurs]
         all_powers = [pw] + [s.power_dbm for s in signal.spurs]
-        
+        noise_floor = signal.get_noise_floor_dbm()
+
         if all_powers:
-            max_power = max(all_powers)
             min_power = min(all_powers)
-            self._y_min = min_power - 10
+            if noise_floor is not None:
+                self._y_min = min(noise_floor, min_power - 3.0)
+            else:
+                self._y_min = min_power - 10
         else:
-            self._y_min = pw - 60
+            self._y_min = noise_floor if noise_floor is not None else (pw - 60)
 
         # Draw carrier impulse
         self._draw_impulse(fc, pw, color=(0, 200, 255), name="Carrier", tooltip=f"{fc/1e9:.4f} GHz")
@@ -94,7 +98,12 @@ class SpectrumPlot(QWidget):
             f"Spectrum — Carrier: {fc/1e9:.4f} GHz @ {pw:.1f} dBm, Spurs: {len(signal.spurs)}"
         )
         self._info_label.setText(
-            f"Carrier: {fc/1e9:.4f} GHz @ {pw:.1f} dBm | Spurs: {len(signal.spurs)}"
+            (
+                f"Carrier: {fc/1e9:.4f} GHz @ {pw:.1f} dBm | "
+                f"Noise floor: {noise_floor:.1f} dBm | Spurs: {len(signal.spurs)}"
+                if noise_floor is not None else
+                f"Carrier: {fc/1e9:.4f} GHz @ {pw:.1f} dBm | Spurs: {len(signal.spurs)}"
+            )
         )
 
     def _draw_impulse(self, freq: float, power_dbm: float, color: Tuple, name: str, tooltip: str = "") -> None:
@@ -206,12 +215,15 @@ class ActualSpectrumPlot(QWidget):
 
         # Collect all frequencies for auto-scaling
         all_powers = [pw] + [s.power_dbm for s in signal.spurs]
+        noise_floor = signal.get_noise_floor_dbm()
         if all_powers:
-            max_power = max(all_powers)
             min_power = min(all_powers)
-            self._y_min = min_power - 10
+            if noise_floor is not None:
+                self._y_min = min(noise_floor, min_power - 3.0)
+            else:
+                self._y_min = min_power - 10
         else:
-            self._y_min = pw - 60
+            self._y_min = noise_floor if noise_floor is not None else (pw - 60)
 
         # Draw carrier impulse
         self._draw_impulse(fc, pw, color=(0, 200, 255), name="Carrier", 
@@ -229,11 +241,13 @@ class ActualSpectrumPlot(QWidget):
         self._plot_widget.setTitle(
             f"Spectrum at {wire_desc} — Carrier: {fc/1e9:.4f} GHz @ {pw:.1f} dBm"
         )
-        self._info_label.setText(
-            f"Carrier: {fc/1e9:.4f} GHz @ {pw:.1f} dBm | SNR: {signal.snr_db:.1f} dB | Spurs: {len(signal.spurs)}"
-            if signal.snr_db is not None else
-            f"Carrier: {fc/1e9:.4f} GHz @ {pw:.1f} dBm | Spurs: {len(signal.spurs)}"
-        )
+        parts = [f"Carrier: {fc/1e9:.4f} GHz @ {pw:.1f} dBm"]
+        if noise_floor is not None:
+            parts.append(f"Noise floor: {noise_floor:.1f} dBm")
+        if signal.snr_db is not None:
+            parts.append(f"SNR: {signal.snr_db:.1f} dB")
+        parts.append(f"Spurs: {len(signal.spurs)}")
+        self._info_label.setText(" | ".join(parts))
 
     def _draw_impulse(self, freq: float, power_dbm: float, color: Tuple, name: str, 
                      is_carrier: bool = False, tooltip: str = "") -> None:
@@ -535,19 +549,6 @@ class FrequencyComponentEditor(QDialog):
         info.setStyleSheet("color: #AABBAA;")
         layout.addWidget(info)
 
-        # LO Frequency field
-        lo_layout = QHBoxLayout()
-        lo_layout.addWidget(QLabel("LO Frequency (Hz):"))
-        lo_spin = QDoubleSpinBox()
-        lo_spin.setMinimum(0)
-        lo_spin.setMaximum(100e9)
-        lo_spin.setValue(self.block.lo_frequency if hasattr(self.block, 'lo_frequency') else 1e9)
-        lo_spin.setSuffix(" Hz")
-        lo_spin.setDecimals(0)
-        lo_layout.addWidget(lo_spin)
-        lo_layout.addStretch()
-        layout.addLayout(lo_layout)
-
         # Expressions table
         self._expr_table = QTableWidget()
         self._expr_table.setColumnCount(3)
@@ -633,6 +634,50 @@ class FrequencyComponentEditor(QDialog):
         """Remove selected row from table."""
         for index in sorted([idx.row() for idx in table.selectedIndexes()], reverse=True):
             table.removeRow(index)
+
+    def accept(self) -> None:
+        """Persist edited frequency-component settings for supported block types before closing."""
+        try:
+            if self.block.BLOCK_TYPE == "Amplifier":
+                coeffs = []
+                for row in range(self._comp_table.rowCount()):
+                    m_widget = self._comp_table.cellWidget(row, 0)
+                    n_widget = self._comp_table.cellWidget(row, 1)
+                    p_widget = self._comp_table.cellWidget(row, 3)
+                    if m_widget is None or n_widget is None or p_widget is None:
+                        continue
+                    coeffs.append({
+                        "m": int(m_widget.value()),
+                        "n": int(n_widget.value()),
+                        "rel_power_db": float(p_widget.value()),
+                    })
+                self.block.spur_coefficients = coeffs
+            elif self.block.BLOCK_TYPE == "Mixer":
+                expressions: List[str] = []
+                coeffs = []
+                from rf_tool.blocks.components import Mixer as MixerCls
+                for row in range(self._expr_table.rowCount()):
+                    expr_item = self._expr_table.item(row, 0)
+                    p_widget = self._expr_table.cellWidget(row, 2)
+                    if expr_item is None or p_widget is None:
+                        continue
+                    expr = expr_item.text().strip()
+                    if not expr:
+                        continue
+                    expressions.append(expr)
+                    mn = MixerCls._expr_to_mn(expr)
+                    if mn is not None:
+                        coeffs.append({
+                            "m": int(mn[0]),
+                            "n": int(mn[1]),
+                            "rel_power_db": float(p_widget.value()),
+                        })
+                if expressions:
+                    self.block.conversion_expressions = expressions
+                self.block.spur_coefficients = coeffs
+        except Exception as exc:
+            QMessageBox.warning(self, "Frequency Component Editor", f"Could not save component edits:\n{exc}")
+        super().accept()
 
     @staticmethod
     def _describe_expression(expr: str) -> str:
@@ -782,15 +827,19 @@ def compute_frequency_sweep(
         "gain_db"    : np.ndarray shape (n_points,)   total gain
         "nf_db"      : np.ndarray shape (n_points,)   total NF (Friis)
     """
-    from rf_tool.engine.cascade import (
-        db_to_linear_power, linear_power_to_db,
-    )
+    from rf_tool.engine.cascade import db_to_linear_power, cascade_networks, s21_to_gain_db
     from rf_tool.blocks.components import SparBlock, TransferFnBlock, LowPassFilter, HighPassFilter
+    try:
+        import skrf  # type: ignore
+    except ImportError:
+        skrf = None
 
     freqs = np.linspace(freq_start, freq_stop, n_points)
     total_gain = np.zeros(n_points)
     total_nf_linear = np.ones(n_points)    # F_total running sum
     cum_gain_linear = np.ones(n_points)    # G1*G2*...*G(k-1)
+    stage_gain_arrays: List[np.ndarray] = []
+    stage_networks = []
 
     for block in blocks:
         # Per-frequency gain
@@ -805,13 +854,33 @@ def compute_frequency_sweep(
         else:
             gain_arr = np.full(n_points, block.gain_db)
 
+        stage_gain_arrays.append(gain_arr)
         total_gain += gain_arr
+        s21_mag = 10.0 ** (gain_arr / 20.0)
+        s = np.zeros((n_points, 2, 2), dtype=complex)
+        s[:, 1, 0] = s21_mag
+        s[:, 0, 1] = s21_mag
+        if skrf is not None:
+            try:
+                freq_obj = skrf.Frequency.from_f(freqs, unit="hz")
+                stage_networks.append(skrf.Network(frequency=freq_obj, s=s))
+            except Exception as exc:
+                logger.warning("compute_frequency_sweep: disabling network cascade fallback due to stage build error: %s", exc)
+                stage_networks = []
+                skrf = None
 
         # Friis NF update: F_total += (F_block - 1) / cum_gain
         F_block = db_to_linear_power(block.nf_db)
         G_arr = 10.0 ** (gain_arr / 10.0)
         total_nf_linear += (F_block - 1.0) / cum_gain_linear
         cum_gain_linear *= G_arr
+
+    if stage_networks:
+        try:
+            total_gain = s21_to_gain_db(cascade_networks(stage_networks))
+        except Exception as exc:
+            logger.warning("compute_frequency_sweep: falling back to additive gains (network cascade failed): %s", exc)
+            total_gain = np.sum(stage_gain_arrays, axis=0) if stage_gain_arrays else np.zeros(n_points)
 
     total_nf_db = 10.0 * np.log10(np.maximum(total_nf_linear, 1e-300))
     return {

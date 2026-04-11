@@ -147,8 +147,8 @@ class TestJsonSerialisation:
         finally:
             os.unlink(path)
 
-    def test_roundtrip_mixer_preserves_lo_freq(self):
-        mix = Mixer(lo_frequency=2.4e9)
+    def test_roundtrip_mixer_preserves_conversion_expressions(self):
+        mix = Mixer(conversion_expressions=["RF-LO", "RF+LO"])
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w") as f:
             path = f.name
         try:
@@ -157,7 +157,7 @@ class TestJsonSerialisation:
             from rf_tool.blocks.components import Mixer as MixerCls
             loaded = result["blocks"][0]
             assert isinstance(loaded, MixerCls)
-            assert loaded.lo_frequency == pytest.approx(2.4e9)
+            assert loaded.conversion_expressions == ["RF-LO", "RF+LO"]
         finally:
             os.unlink(path)
 

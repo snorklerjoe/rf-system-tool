@@ -215,8 +215,15 @@ class TestSignalSerialisation:
     def test_to_dict_keys(self):
         sig = Signal(1e9, -10.0)
         d = sig.to_dict()
-        for key in ("carrier_frequency", "power_dbm", "spurs", "phase_noise_dbc_hz", "snr_db"):
+        for key in ("carrier_frequency", "power_dbm", "spurs", "phase_noise_dbc_hz", "snr_db", "noise_floor_dbm"):
             assert key in d
+
+    def test_noise_floor_helpers_round_trip(self):
+        sig = Signal(1e9, -10.0, snr_db=40.0)
+        assert sig.get_noise_floor_dbm() == pytest.approx(-50.0)
+        sig.set_noise_floor_dbm(-60.0)
+        assert sig.noise_floor_dbm == pytest.approx(-60.0)
+        assert sig.snr_db == pytest.approx(50.0)
 
     def test_round_trip_with_snr(self):
         sig = Signal(1e9, -12.0, snr_db=48.0)

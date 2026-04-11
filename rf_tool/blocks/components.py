@@ -103,7 +103,6 @@ class Mixer(RFBlock):
 
     def __init__(
         self,
-        lo_frequency: float = 1e9,
         conversion_expressions: Optional[List[str]] = None,
         **kwargs,
     ):
@@ -111,9 +110,10 @@ class Mixer(RFBlock):
         kwargs.setdefault("color", "#E8A838")
         kwargs.setdefault("gain_db", -7.0)       # typical conversion loss
         kwargs.setdefault("nf_db", 7.0)
-        self.lo_frequency: float = lo_frequency
         # Default: IF = RF - LO  (down-conversion)
         self.conversion_expressions: List[str] = conversion_expressions or ["RF-LO"]
+        self._last_rf_signal: Optional[Signal] = None
+        self._last_lo_signal: Optional[Signal] = None
         super().__init__(**kwargs)
 
     def _setup_ports(self) -> None:
@@ -121,27 +121,56 @@ class Mixer(RFBlock):
         self._output_ports = [Port("IF", "output", 0)]
 
     def process(self, signal: Signal, port_name: str = "RF") -> Dict[str, Signal]:
-        """Mix RF with LO.  LO frequency taken from self.lo_frequency."""
-        f_rf = signal.carrier_frequency
-        f_lo = self.lo_frequency
-        out_signal = signal.apply_gain(self.gain_db)
+        """
+        Mix RF and LO inputs.
 
-        # Evaluate output frequency components
-        for expr in self.conversion_expressions:
-            try:
-                f_out = self._eval_freq_expr(expr, f_rf, f_lo)
-                out_signal.carrier_frequency = f_out
-            except Exception:
-                pass
+        Output components are generated from every RF tone × LO tone combination.
+        """
+        if port_name == "RF":
+            self._last_rf_signal = signal.copy()
+        elif port_name == "LO":
+            self._last_lo_signal = signal.copy()
+        else:
+            self._last_rf_signal = signal.copy()
 
-        # Generate IM products as spurs
-        for coeff in self.spur_coefficients:
-            m = coeff.get("m", 1)
-            n = coeff.get("n", 0)
-            rel_db = coeff.get("rel_power_db", -60.0)
-            f_spur = m * f_rf + n * f_lo
-            p_spur = signal.power_dbm + self.gain_db + rel_db
-            out_signal.add_spur(f_spur, p_spur)
+        rf_sig = self._last_rf_signal
+        lo_sig = self._last_lo_signal
+        if rf_sig is None or lo_sig is None:
+            return {}
+
+        rf_components = self._all_components(rf_sig)
+        lo_components = self._all_components(lo_sig)
+        if not rf_components or not lo_components:
+            return {}
+
+        coeffs = self._effective_mixing_coefficients()
+        tones: List[tuple] = []
+        for m, n, rel_db in coeffs:
+            for f_rf, p_rf in rf_components:
+                for f_lo, p_lo in lo_components:
+                    f_out = m * f_rf + n * f_lo
+                    p_out = p_rf + p_lo + self.gain_db + rel_db
+                    tones.append((f_out, p_out))
+
+        if not tones:
+            return {}
+
+        tones.sort(key=lambda x: x[1], reverse=True)
+        carrier_f, carrier_p = tones[0]
+        out_signal = Signal(carrier_frequency=carrier_f, power_dbm=carrier_p, spurs=[])
+        for f_out, p_out in tones[1:]:
+            out_signal.add_spur(f_out, p_out)
+
+        rf_nf = rf_sig.get_noise_floor_dbm()
+        lo_nf = lo_sig.get_noise_floor_dbm()
+        noise_terms = []
+        if rf_nf is not None:
+            noise_terms.append(10.0 ** ((rf_nf + self.gain_db) / 10.0))
+        if lo_nf is not None:
+            noise_terms.append(10.0 ** ((lo_nf + self.gain_db) / 10.0))
+        if noise_terms:
+            total_noise_mw = sum(noise_terms)
+            out_signal.set_noise_floor_dbm(10.0 * math.log10(max(total_noise_mw, 1e-300)))
 
         return {"IF": out_signal}
 
@@ -156,16 +185,66 @@ class Mixer(RFBlock):
         result = eval(safe_expr, {"__builtins__": {}}, {"RF": f_rf, "LO": f_lo})  # noqa: S307
         return float(result)
 
+    @classmethod
+    def _expr_to_mn(cls, expr: str) -> Optional[tuple[int, int]]:
+        """Extract linear coefficients (m, n) from an expression m*RF+n*LO."""
+        try:
+            m = cls._eval_freq_expr(expr, 1.0, 0.0)
+            n = cls._eval_freq_expr(expr, 0.0, 1.0)
+            c = cls._eval_freq_expr(expr, 0.0, 0.0)
+        except (ValueError, TypeError, SyntaxError, NameError):
+            return None
+        if abs(c) > 1e-12:
+            return None
+        m_i = int(round(m))
+        n_i = int(round(n))
+        if abs(m - m_i) > 1e-9 or abs(n - n_i) > 1e-9:
+            return None
+        return m_i, n_i
+
+    @staticmethod
+    def _all_components(signal: Signal) -> List[tuple]:
+        comps = [(signal.carrier_frequency, signal.power_dbm)]
+        comps.extend((s.frequency, s.power_dbm) for s in signal.spurs)
+        return comps
+
+    def _effective_mixing_coefficients(self) -> List[tuple]:
+        """
+        Return list of (m, n, rel_power_db) coefficients.
+
+        Uses explicit spur coefficients when provided; otherwise converts
+        conversion expressions to linear coefficients.
+        """
+        coeffs: List[tuple] = []
+        for expr in self.conversion_expressions:
+            mn = self._expr_to_mn(expr)
+            if mn is not None:
+                coeffs.append((mn[0], mn[1], 0.0))
+        for coeff in self.spur_coefficients:
+            m = int(coeff.get("m", 1))
+            n = int(coeff.get("n", 0))
+            rel_db = float(coeff.get("rel_power_db", 0.0))
+            coeffs.append((m, n, rel_db))
+        if not coeffs:
+            coeffs.append((1, -1, 0.0))
+        unique = []
+        seen = set()
+        for m, n, rel_db in coeffs:
+            key = (m, n, round(rel_db, 9))
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append((m, n, rel_db))
+        return unique
+
     def to_dict(self) -> dict:
         d = super().to_dict()
-        d["lo_frequency"] = self.lo_frequency
         d["conversion_expressions"] = self.conversion_expressions
         return d
 
     @classmethod
     def from_dict(cls, d: dict) -> "Mixer":
         obj = cls(
-            lo_frequency=d.get("lo_frequency", 1e9),
             conversion_expressions=d.get("conversion_expressions", ["RF-LO"]),
             block_id=d.get("block_id"),
             label=d.get("label", "Mixer"),
@@ -744,11 +823,14 @@ class Source(RFBlock):
 
     def generate(self) -> Signal:
         """Create and return the source signal."""
-        return Signal(
+        sig = Signal(
             carrier_frequency=self.frequency,
             power_dbm=self.output_power_dbm,
             snr_db=self.snr_db,
         )
+        if self.snr_db is not None:
+            sig.set_noise_floor_dbm(self.output_power_dbm - self.snr_db)
+        return sig
 
     def process(self, signal=None, port_name: str = "OUT") -> Dict[str, Signal]:
         return {"OUT": self.generate()}
