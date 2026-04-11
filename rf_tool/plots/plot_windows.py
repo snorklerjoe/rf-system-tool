@@ -75,7 +75,7 @@ class SpectrumPlot(QWidget):
 
         # Collect all frequencies for auto-scaling
         all_powers = [pw] + [s.power_dbm for s in signal.spurs]
-        noise_floor = signal.get_noise_floor_dbm() if hasattr(signal, "get_noise_floor_dbm") else None
+        noise_floor = signal.get_noise_floor_dbm()
 
         if all_powers:
             min_power = min(all_powers)
@@ -215,7 +215,7 @@ class ActualSpectrumPlot(QWidget):
 
         # Collect all frequencies for auto-scaling
         all_powers = [pw] + [s.power_dbm for s in signal.spurs]
-        noise_floor = signal.get_noise_floor_dbm() if hasattr(signal, "get_noise_floor_dbm") else None
+        noise_floor = signal.get_noise_floor_dbm()
         if all_powers:
             min_power = min(all_powers)
             if noise_floor is not None:

@@ -266,7 +266,8 @@ class TestMixer:
         m.process(make_signal(fc=2e9, pwr=0.0), "RF")
         out = m.process(make_signal(fc=1e9, pwr=0.0), "LO")["IF"]
         # Spur at 2*RF + 1*LO = 5 GHz  (m=2, n=1)
-        assert out.carrier_frequency == pytest.approx(5e9)
+        freqs = [out.carrier_frequency] + [s.frequency for s in out.spurs]
+        assert any(abs(f - 5e9) < 1e-3 for f in freqs)
 
     def test_round_trip(self):
         m = Mixer(conversion_expressions=["RF-LO"], gain_db=-6.0)

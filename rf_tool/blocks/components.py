@@ -216,20 +216,26 @@ class Mixer(RFBlock):
         conversion expressions to linear coefficients.
         """
         coeffs: List[tuple] = []
-        if self.spur_coefficients:
-            for coeff in self.spur_coefficients:
-                m = int(coeff.get("m", 1))
-                n = int(coeff.get("n", 0))
-                rel_db = float(coeff.get("rel_power_db", 0.0))
-                coeffs.append((m, n, rel_db))
-        else:
-            for expr in self.conversion_expressions:
-                mn = self._expr_to_mn(expr)
-                if mn is not None:
-                    coeffs.append((mn[0], mn[1], 0.0))
+        for expr in self.conversion_expressions:
+            mn = self._expr_to_mn(expr)
+            if mn is not None:
+                coeffs.append((mn[0], mn[1], 0.0))
+        for coeff in self.spur_coefficients:
+            m = int(coeff.get("m", 1))
+            n = int(coeff.get("n", 0))
+            rel_db = float(coeff.get("rel_power_db", 0.0))
+            coeffs.append((m, n, rel_db))
         if not coeffs:
             coeffs.append((1, -1, 0.0))
-        return coeffs
+        unique = []
+        seen = set()
+        for m, n, rel_db in coeffs:
+            key = (m, n, round(rel_db, 9))
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append((m, n, rel_db))
+        return unique
 
     def to_dict(self) -> dict:
         d = super().to_dict()

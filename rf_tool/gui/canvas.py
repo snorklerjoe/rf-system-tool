@@ -377,14 +377,13 @@ class RFScene(QGraphicsScene):
             return False
         if len(a.spurs) != len(b.spurs):
             return False
-        a_nf = a.get_noise_floor_dbm() if hasattr(a, "get_noise_floor_dbm") else None
-        b_nf = b.get_noise_floor_dbm() if hasattr(b, "get_noise_floor_dbm") else None
-        if a_nf is None and b_nf is None:
-            return True
-        if (a_nf is None) != (b_nf is None):
-            return False
-        if abs(a_nf - b_nf) > POWER_EPSILON_DBM:
-            return False
+        a_nf = a.get_noise_floor_dbm()
+        b_nf = b.get_noise_floor_dbm()
+        if not (a_nf is None and b_nf is None):
+            if (a_nf is None) != (b_nf is None):
+                return False
+            if abs(a_nf - b_nf) > POWER_EPSILON_DBM:
+                return False
         return True
 
     @staticmethod
