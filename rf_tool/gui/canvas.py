@@ -137,6 +137,7 @@ class RFScene(QGraphicsScene):
     block_selected = Signal(str)                     # block_id
     block_double_clicked = Signal(str)
     wire_selected = Signal(str, str, str, str)       # src_bid, src_port, dst_bid, dst_port
+    blocks_selected = Signal(list)                   # list of block_ids (multi-select)
     scene_changed = Signal()
 
     def __init__(self, parent=None):
@@ -207,13 +208,17 @@ class RFScene(QGraphicsScene):
                 item.setSelected(True)
 
     def _on_selection_changed(self) -> None:
-        """Handle selection changes - emit wire_selected signal when a wire is selected."""
+        """Handle selection changes - emit wire_selected or blocks_selected signals."""
         selected_wires = [item for item in self.selectedItems() if isinstance(item, WireItem)]
-        if len(selected_wires) == 1:
+        selected_blocks = [item for item in self.selectedItems() if isinstance(item, BlockItem)]
+
+        if len(selected_wires) == 1 and not selected_blocks:
             wire = selected_wires[0]
             src_bid = wire.src_port.parentItem().block.block_id
             dst_bid = wire.dst_port.parentItem().block.block_id
             self.wire_selected.emit(src_bid, wire.src_port.port.name, dst_bid, wire.dst_port.port.name)
+        elif len(selected_blocks) >= 2:
+            self.blocks_selected.emit([item.block.block_id for item in selected_blocks])
 
     def rebuild_block_ports(self, block_id: str) -> None:
         item = self._block_items.get(block_id)

@@ -10,10 +10,10 @@ import copy
 
 from PySide6.QtWidgets import (
     QMainWindow, QDockWidget, QToolBar, QStatusBar,
-    QFileDialog, QMessageBox, QWidget, QLabel,
+    QFileDialog, QMessageBox, QWidget, QLabel, QMenu,
 )
 from PySide6.QtGui import QAction, QKeySequence
-from PySide6.QtCore import Qt, QPointF
+from PySide6.QtCore import Qt, QPointF, QSettings
 
 from rf_tool.gui.canvas import RFScene, RFCanvasView, WireItem
 from rf_tool.gui.node_items import BlockItem, AnnotationItem
@@ -31,6 +31,8 @@ from rf_tool.models.rf_block import RFBlock
 from rf_tool.engine.cascade import compute_cascade_metrics
 from rf_tool.serialization.json_io import save_scene, load_scene
 from rf_tool.export.exporters import export_cascade_csv, export_html_report, export_canvas_image
+
+_MAX_RECENT_FILES = 10
 
 
 class MainWindow(QMainWindow):
@@ -57,8 +59,9 @@ class MainWindow(QMainWindow):
         self._scene.block_double_clicked.connect(self._on_block_double_clicked)
         self._scene.scene_changed.connect(self._on_scene_changed)
         self._scene.wire_selected.connect(self._on_wire_selected)
+        self._scene.blocks_selected.connect(self._on_blocks_selected)
         self._refresh_metrics_block_lists()
-        
+
         # Spectrum viewer
         self._spectrum_plot: Optional[ActualSpectrumPlot] = None
 
@@ -155,6 +158,45 @@ class MainWindow(QMainWindow):
         self._view.zoom_to_fit()
         self._status.showMessage("Zoomed to fit")
 
+    # ------------------------------------------------------------------ #
+    # Recent files (uses QSettings for platform-standard storage)         #
+    # ------------------------------------------------------------------ #
+    def _recent_files(self) -> List[str]:
+        s = QSettings()
+        raw = s.value("recentFiles", [])
+        return list(raw) if isinstance(raw, list) else []
+
+    def _add_recent_file(self, path: str) -> None:
+        s = QSettings()
+        files: List[str] = self._recent_files()
+        if path in files:
+            files.remove(path)
+        files.insert(0, path)
+        files = files[:_MAX_RECENT_FILES]
+        s.setValue("recentFiles", files)
+
+    def _populate_recent_menu(self) -> None:
+        self._recent_menu.clear()
+        files = self._recent_files()
+        if not files:
+            empty_act = QAction("(no recent files)", self)
+            empty_act.setEnabled(False)
+            self._recent_menu.addAction(empty_act)
+            return
+        for path in files:
+            label = os.path.basename(path)
+            act = QAction(label, self)
+            act.setToolTip(path)
+            act.triggered.connect(lambda _checked, p=path: self._open_scene_path(p))
+            self._recent_menu.addAction(act)
+        self._recent_menu.addSeparator()
+        clear_act = QAction("Clear Recent Files", self)
+        clear_act.triggered.connect(self._clear_recent_files)
+        self._recent_menu.addAction(clear_act)
+
+    def _clear_recent_files(self) -> None:
+        QSettings().setValue("recentFiles", [])
+
     def _setup_menu(self) -> None:
         menubar = self.menuBar()
 
@@ -170,6 +212,11 @@ class MainWindow(QMainWindow):
         act_save_as.triggered.connect(self._save_scene_as)
         file_menu.addAction(act_new)
         file_menu.addAction(act_open)
+
+        # Open Recent submenu
+        self._recent_menu = file_menu.addMenu("Open &Recent")
+        self._recent_menu.aboutToShow.connect(self._populate_recent_menu)
+
         file_menu.addSeparator()
         file_menu.addAction(act_save)
         file_menu.addAction(act_save_as)
@@ -455,27 +502,58 @@ class MainWindow(QMainWindow):
 
     def _on_wire_selected(self, src_bid: str, src_port: str, dst_bid: str, dst_port: str) -> None:
         """Handle wire selection - show its spectrum in the persistent viewer."""
-        # Propagate signals first to get the latest signal state
         signals_at = self._scene.propagate_signals()
-        
-        # Get the destination signal
+
         if dst_bid not in signals_at or dst_port not in signals_at[dst_bid]:
             return
-        
+
         signal = signals_at[dst_bid][dst_port]
-        
-        # Get block labels for display
+
         src_item = self._scene.get_block_item(src_bid)
         dst_item = self._scene.get_block_item(dst_bid)
         src_label = src_item.block.label if src_item else "Source"
         dst_label = dst_item.block.label if dst_item else "Dest"
-        
-        # Show spectrum in persistent viewer
+
         if self._spectrum_plot is None:
             self._spectrum_plot = ActualSpectrumPlot(None)
             self._spectrum_plot.setAttribute(Qt.WA_DeleteOnClose, False)
-        
+
         self._spectrum_plot.set_signal_from_wire(signal, src_label, dst_label, dst_port)
+        self._spectrum_plot.show()
+        self._spectrum_plot.raise_()
+        self._spectrum_plot.activateWindow()
+
+    def _on_blocks_selected(self, block_ids: list) -> None:
+        """Handle multi-block selection - overlay all output signals in the spectrum viewer."""
+        signals_at = self._scene.propagate_signals()
+
+        signals_with_labels = []
+        for bid in block_ids:
+            item = self._scene.get_block_item(bid)
+            if item is None:
+                continue
+            block = item.block
+            # Get first output port signal
+            out_ports = block.output_ports
+            signal = None
+            for port in out_ports:
+                sig = signals_at.get(bid, {}).get(port.name)
+                if sig is not None:
+                    signal = sig
+                    break
+            label = f"{block.BLOCK_TYPE}: {block.label}"
+            signals_with_labels.append((label, signal))
+
+        if not any(sig for _, sig in signals_with_labels):
+            return
+
+        if self._spectrum_plot is None:
+            self._spectrum_plot = ActualSpectrumPlot(None)
+            self._spectrum_plot.setAttribute(Qt.WA_DeleteOnClose, False)
+
+        self._spectrum_plot.set_multi_signals(signals_with_labels)
+        self._spectrum_plot._wire_label.setText("Multi-node selection")
+        self._spectrum_plot._plot_widget.setTitle("Signal Spectrum — Multiple Nodes")
         self._spectrum_plot.show()
         self._spectrum_plot.raise_()
         self._spectrum_plot.activateWindow()
@@ -562,12 +640,15 @@ class MainWindow(QMainWindow):
 
         path_blocks = [self._scene.get_block_item(bid).block for bid in path_ids
                        if self._scene.get_block_item(bid) is not None]
-        metrics = compute_cascade_metrics(self._effective_blocks(path_blocks))
+        eff_blocks = self._effective_blocks(path_blocks)
+        metrics = compute_cascade_metrics(eff_blocks)
+        stage_labels = [f"{b.BLOCK_TYPE}: {b.label}" for b in eff_blocks]
 
         dlg = CascadeReadoutDialog(
             metrics,
             start_label=labels[start_id],
             end_label=labels[end_id],
+            stage_labels=stage_labels,
             parent=self,
         )
         dlg.exec()
@@ -695,8 +776,11 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getOpenFileName(
             self, "Open Scene", "", "RF Tool Scene (*.json);;All (*)"
         )
-        if not path:
-            return
+        if path:
+            self._open_scene_path(path)
+
+    def _open_scene_path(self, path: str) -> None:
+        """Load a scene from *path*, updating recent files on success."""
         try:
             data = load_scene(path)
             self._scene.clear_scene()
@@ -714,6 +798,7 @@ class MainWindow(QMainWindow):
             self._current_file = path
             self.setWindowTitle(f"RF System Tool — {os.path.basename(path)}")
             self._status.showMessage(f"Loaded {path}")
+            self._add_recent_file(path)
         except Exception as exc:
             QMessageBox.critical(self, "Open Error", str(exc))
 
@@ -739,6 +824,7 @@ class MainWindow(QMainWindow):
             self._current_file = path
             self.setWindowTitle(f"RF System Tool — {os.path.basename(path)}")
             self._status.showMessage(f"Saved {path}")
+            self._add_recent_file(path)
         except Exception as exc:
             QMessageBox.critical(self, "Save Error", str(exc))
 

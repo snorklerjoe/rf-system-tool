@@ -28,6 +28,42 @@ pg.setConfigOption("background", "k")
 pg.setConfigOption("foreground", "w")
 logger = logging.getLogger(__name__)
 
+# Colour palette used when displaying multiple overlaid signals
+_SIGNAL_COLORS: List[Tuple[int, int, int]] = [
+    (0, 200, 255),    # cyan
+    (255, 150, 0),    # orange
+    (50, 255, 50),    # green
+    (255, 255, 0),    # yellow
+    (200, 50, 255),   # purple
+    (255, 80, 80),    # red
+    (50, 200, 150),   # teal
+    (255, 150, 200),  # pink
+]
+
+_NOISE_COLOR = (80, 80, 80)       # dark grey for noise trace
+_NOISE_FLOOR_LINE_COLOR = (140, 140, 140)  # slightly brighter for the reference line
+
+
+def _draw_noise_floor(plot_widget: pg.PlotWidget,
+                      noise_floor_dbm: float,
+                      x_min: float, x_max: float) -> None:
+    """Draw a noisy noise-floor band across the given x range."""
+    n_pts = 600
+    xs = np.linspace(x_min, x_max, n_pts)
+    ys = noise_floor_dbm + np.random.uniform(-0.5, 0.5, n_pts)
+    noise_trace = pg.PlotDataItem(
+        xs, ys,
+        pen=pg.mkPen(_NOISE_COLOR, width=1.0),
+        name="Noise floor",
+    )
+    plot_widget.addItem(noise_trace)
+    # Dashed reference line at the exact noise floor level
+    ref_line = pg.InfiniteLine(
+        pos=noise_floor_dbm, angle=0,
+        pen=pg.mkPen(_NOISE_FLOOR_LINE_COLOR, width=1.0, style=Qt.DashLine),
+    )
+    plot_widget.addItem(ref_line)
+
 
 # ======================================================================= #
 # Spectrum Plot - Enhanced                                                 #
@@ -38,6 +74,7 @@ class SpectrumPlot(QWidget):
     Shows the frequency-domain spectrum at a Sink node.
 
     Draws vertical impulse lines for each tone (carrier + spurs) with improved rendering.
+    Noise floor is shown as a noisy trace at the bottom of the display.
     """
 
     def __init__(self, parent=None):
@@ -46,18 +83,31 @@ class SpectrumPlot(QWidget):
         self.resize(900, 500)
         layout = QVBoxLayout(self)
 
+        # Toolbar row: zoom-to-fit button
+        btn_row = QHBoxLayout()
+        zoom_btn = QPushButton("⛶ Zoom to Fit")
+        zoom_btn.setToolTip("Auto-scale axes to fit all data")
+        zoom_btn.clicked.connect(self._zoom_to_fit)
+        btn_row.addWidget(zoom_btn)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
         self._plot_widget = pg.PlotWidget(title="Spectrum at Node")
         self._plot_widget.setLabel("bottom", "Frequency", units="Hz")
         self._plot_widget.setLabel("left", "Power", units="dBm")
         self._plot_widget.showGrid(x=True, y=True, alpha=0.3)
+        self._plot_widget.addLegend()
         layout.addWidget(self._plot_widget)
 
         self._info_label = QLabel("")
         self._info_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self._info_label)
-        
+
         self._current_signal = None
         self._y_min = None
+
+    def _zoom_to_fit(self) -> None:
+        self._plot_widget.autoRange()
 
     def set_signal(self, signal) -> None:
         """
@@ -73,26 +123,44 @@ class SpectrumPlot(QWidget):
         fc = signal.carrier_frequency
         pw = signal.power_dbm
 
-        # Collect all frequencies for auto-scaling
+        all_freqs = [fc] + [s.frequency for s in signal.spurs]
         all_powers = [pw] + [s.power_dbm for s in signal.spurs]
         noise_floor = signal.get_noise_floor_dbm()
 
-        if all_powers:
-            min_power = min(all_powers)
-            if noise_floor is not None:
-                self._y_min = min(noise_floor, min_power - 3.0)
-            else:
-                self._y_min = min_power - 10
+        max_power = max(all_powers)
+        min_power = min(all_powers)
+
+        # Noise floor must always be the bottom of the display
+        if noise_floor is not None:
+            y_min = noise_floor - 5.0
         else:
-            self._y_min = noise_floor if noise_floor is not None else (pw - 60)
+            y_min = min_power - 10.0
+        y_max = max_power + max(10.0, abs(max_power - y_min) * 0.1)
+        self._y_min = y_min
+
+        # X range
+        x_min_freq = min(all_freqs)
+        x_max_freq = max(all_freqs)
+        x_span = max(x_max_freq - x_min_freq, 1e6)
+        x_draw_min = x_min_freq - x_span * 0.5
+        x_draw_max = x_max_freq + x_span * 0.5
+
+        # Draw noise floor trace spanning the full x range
+        if noise_floor is not None:
+            _draw_noise_floor(self._plot_widget, noise_floor, x_draw_min, x_draw_max)
 
         # Draw carrier impulse
-        self._draw_impulse(fc, pw, color=(0, 200, 255), name="Carrier", tooltip=f"{fc/1e9:.4f} GHz")
+        self._draw_impulse(fc, pw, color=(0, 200, 255), name="Carrier",
+                           tooltip=f"{fc/1e9:.4f} GHz")
 
         # Draw spurs
         for i, spur in enumerate(signal.spurs):
-            self._draw_impulse(spur.frequency, spur.power_dbm, color=(255, 100, 0), 
-                             name=f"Spur {i+1}", tooltip=f"{spur.frequency/1e9:.4f} GHz")
+            self._draw_impulse(spur.frequency, spur.power_dbm, color=(255, 100, 0),
+                               name=f"Spur {i+1}", tooltip=f"{spur.frequency/1e9:.4f} GHz")
+
+        # Explicitly set y range so noise floor is always at the bottom
+        self._plot_widget.setYRange(y_min, y_max, padding=0)
+        self._plot_widget.setXRange(x_draw_min, x_draw_max, padding=0.02)
 
         self._plot_widget.setTitle(
             f"Spectrum — Carrier: {fc/1e9:.4f} GHz @ {pw:.1f} dBm, Spurs: {len(signal.spurs)}"
@@ -106,18 +174,11 @@ class SpectrumPlot(QWidget):
             )
         )
 
-    def _draw_impulse(self, freq: float, power_dbm: float, color: Tuple, name: str, tooltip: str = "") -> None:
-        """
-        Draw a vertical impulse line with nice styling.
-        
-        Includes:
-        - Vertical stem line from bottom to power level
-        - Small horizontal tick at top
-        - Optional frequency label below
-        """
+    def _draw_impulse(self, freq: float, power_dbm: float, color: Tuple, name: str,
+                      tooltip: str = "") -> None:
+        """Draw a vertical impulse line (stem + tick + dot)."""
         bottom = self._y_min if self._y_min is not None else power_dbm - 60
 
-        # Vertical line (stem)
         stem = pg.PlotDataItem(
             [freq, freq], [bottom, power_dbm],
             pen=pg.mkPen(color, width=2.5),
@@ -125,15 +186,13 @@ class SpectrumPlot(QWidget):
         )
         self._plot_widget.addItem(stem)
 
-        # Horizontal tick at top for better visibility
         tick_width = abs(freq) * 0.008 if freq != 0 else 1e6
         tick = pg.PlotDataItem(
             [freq - tick_width, freq + tick_width], [power_dbm, power_dbm],
             pen=pg.mkPen(color, width=2.5),
         )
         self._plot_widget.addItem(tick)
-        
-        # Small dot at peak for emphasis
+
         dot = pg.ScatterPlotItem(
             x=[freq], y=[power_dbm],
             size=6, brush=pg.mkBrush(color), pen=pg.mkPen(color),
@@ -144,15 +203,16 @@ class SpectrumPlot(QWidget):
 
 
 # ======================================================================= #
-# Actual Spectrum Plot - For Wire Signals                                 #
+# Actual Spectrum Plot - For Wire Signals / Multi-Node                    #
 # ======================================================================= #
 
 class ActualSpectrumPlot(QWidget):
     """
-    Persistent spectrum viewer that shows actual signals propagating through wires.
-    
-    Updates automatically when you click on a wire in the canvas.
-    Features nice impulse rendering with frequency labels and hover information.
+    Persistent spectrum viewer that shows actual signals propagating through wires
+    or at selected blocks.
+
+    Supports overlaying multiple signals (ctrl-click multi-node selection) with
+    distinct colours and a legend identifying each component.
     """
 
     def __init__(self, parent=None):
@@ -161,12 +221,16 @@ class ActualSpectrumPlot(QWidget):
         self.resize(900, 500)
         layout = QVBoxLayout(self)
 
-        # Info section
+        # Top bar: wire/node label + zoom-to-fit button
         info_layout = QHBoxLayout()
         self._wire_label = QLabel("Click on a wire to show its spectrum")
         self._wire_label.setStyleSheet("color: #AABBDD; font-weight: bold;")
         info_layout.addWidget(self._wire_label)
         info_layout.addStretch()
+        zoom_btn = QPushButton("⛶ Zoom to Fit")
+        zoom_btn.setToolTip("Auto-scale axes to fit all data")
+        zoom_btn.clicked.connect(self._zoom_to_fit)
+        info_layout.addWidget(zoom_btn)
         layout.addLayout(info_layout)
 
         # Plot widget
@@ -174,6 +238,7 @@ class ActualSpectrumPlot(QWidget):
         self._plot_widget.setLabel("bottom", "Frequency", units="Hz")
         self._plot_widget.setLabel("left", "Power", units="dBm")
         self._plot_widget.showGrid(x=True, y=True, alpha=0.3)
+        self._legend = self._plot_widget.addLegend(offset=(10, 10))
         layout.addWidget(self._plot_widget)
 
         # Status info
@@ -181,99 +246,172 @@ class ActualSpectrumPlot(QWidget):
         self._info_label.setAlignment(Qt.AlignCenter)
         self._info_label.setStyleSheet("color: #CCCCCC; font-size: 10pt;")
         layout.addWidget(self._info_label)
-        
+
         self._current_signal = None
         self._current_wire_info = None
         self._y_min = None
 
-    def set_signal_from_wire(self, signal, src_block_label: str = "", dst_block_label: str = "", port_name: str = "") -> None:
+    def _zoom_to_fit(self) -> None:
+        self._plot_widget.autoRange()
+
+    def set_signal_from_wire(self, signal, src_block_label: str = "",
+                             dst_block_label: str = "", port_name: str = "") -> None:
         """
-        Display a signal from a wire connection.
-        
+        Display a single signal from a wire connection.
+
         Parameters
         ----------
         signal : Signal
-            The RF signal to display
         src_block_label : str
-            Label of source block
         dst_block_label : str
-            Label of destination block
         port_name : str
-            Name of the destination port
         """
-        self._current_signal = signal
-        self._current_wire_info = (src_block_label, dst_block_label, port_name)
-        self._plot_widget.clear()
-
-        if signal is None:
+        label = f"{src_block_label} → {dst_block_label}"
+        self.set_multi_signals([(label, signal)])
+        if signal is not None:
+            wire_desc = f"{src_block_label} → {dst_block_label} ({port_name})"
+            self._wire_label.setText(wire_desc)
+            self._plot_widget.setTitle(
+                f"Spectrum at {wire_desc}"
+            )
+        else:
             self._wire_label.setText("No signal on this wire")
+            self._info_label.setText("")
+
+    def set_multi_signals(
+        self,
+        signals_with_labels: List[Tuple[str, Any]],
+    ) -> None:
+        """
+        Overlay multiple signals on the same plot with distinct colours.
+
+        Parameters
+        ----------
+        signals_with_labels : list of (label, signal) tuples
+            Each *signal* is a Signal object (or None to skip).
+        """
+        self._plot_widget.clear()
+        # Re-attach legend after clear (clear() removes it)
+        self._legend = self._plot_widget.addLegend(offset=(10, 10))
+
+        valid = [(lbl, sig) for lbl, sig in signals_with_labels if sig is not None]
+        if not valid:
             self._info_label.setText("")
             return
 
-        fc = signal.carrier_frequency
-        pw = signal.power_dbm
+        # ---- Determine axis ranges across all signals ----
+        all_powers: List[float] = []
+        all_noise_floors: List[float] = []
+        all_freqs: List[float] = []
+        for _lbl, sig in valid:
+            all_powers.append(sig.power_dbm)
+            all_powers.extend(s.power_dbm for s in sig.spurs)
+            nf = sig.get_noise_floor_dbm()
+            if nf is not None:
+                all_noise_floors.append(nf)
+            all_freqs.append(sig.carrier_frequency)
+            all_freqs.extend(s.frequency for s in sig.spurs)
 
-        # Collect all frequencies for auto-scaling
-        all_powers = [pw] + [s.power_dbm for s in signal.spurs]
-        noise_floor = signal.get_noise_floor_dbm()
-        if all_powers:
-            min_power = min(all_powers)
-            if noise_floor is not None:
-                self._y_min = min(noise_floor, min_power - 3.0)
-            else:
-                self._y_min = min_power - 10
-        else:
-            self._y_min = noise_floor if noise_floor is not None else (pw - 60)
+        max_power = max(all_powers)
+        min_power = min(all_powers)
+        noise_floor = min(all_noise_floors) if all_noise_floors else None
 
-        # Draw carrier impulse
-        self._draw_impulse(fc, pw, color=(0, 200, 255), name="Carrier", 
-                         is_carrier=True, tooltip=f"{fc/1e9:.4f} GHz")
-
-        # Draw spurs
-        for i, spur in enumerate(signal.spurs):
-            self._draw_impulse(spur.frequency, spur.power_dbm, color=(255, 100, 0), 
-                             name=f"Spur {i+1}", tooltip=f"{spur.frequency/1e9:.4f} GHz")
-
-        # Update labels
-        wire_desc = f"{src_block_label} → {dst_block_label} ({port_name})"
-        self._wire_label.setText(wire_desc)
-        
-        self._plot_widget.setTitle(
-            f"Spectrum at {wire_desc} — Carrier: {fc/1e9:.4f} GHz @ {pw:.1f} dBm"
-        )
-        parts = [f"Carrier: {fc/1e9:.4f} GHz @ {pw:.1f} dBm"]
+        # Noise floor is always the lowest thing on the display
         if noise_floor is not None:
-            parts.append(f"Noise floor: {noise_floor:.1f} dBm")
-        if signal.snr_db is not None:
-            parts.append(f"SNR: {signal.snr_db:.1f} dB")
-        parts.append(f"Spurs: {len(signal.spurs)}")
-        self._info_label.setText(" | ".join(parts))
+            y_min = noise_floor - 5.0
+        else:
+            y_min = min_power - 10.0
+        y_max = max_power + max(10.0, abs(max_power - y_min) * 0.1)
+        self._y_min = y_min
 
-    def _draw_impulse(self, freq: float, power_dbm: float, color: Tuple, name: str, 
-                     is_carrier: bool = False, tooltip: str = "") -> None:
+        # ---- Determine x range ----
+        x_min_freq = min(all_freqs)
+        x_max_freq = max(all_freqs)
+        x_span = max(x_max_freq - x_min_freq, 1e6)
+        x_draw_min = x_min_freq - x_span * 0.5
+        x_draw_max = x_max_freq + x_span * 0.5
+
+        # ---- Noise floor trace (drawn first, behind signals) ----
+        if noise_floor is not None:
+            _draw_noise_floor(self._plot_widget, noise_floor, x_draw_min, x_draw_max)
+
+        # ---- Draw each signal with its own colour ----
+        info_parts: List[str] = []
+        for i, (label, sig) in enumerate(valid):
+            color = _SIGNAL_COLORS[i % len(_SIGNAL_COLORS)]
+            fc = sig.carrier_frequency
+            pw = sig.power_dbm
+            sig_nf = sig.get_noise_floor_dbm()
+
+            # Carrier: stem gets the legend name
+            self._draw_impulse(fc, pw, color=color,
+                               name=label,
+                               is_carrier=True,
+                               tooltip=f"{fc/1e9:.4f} GHz")
+            # Spurs: slightly darker shade
+            spur_color = tuple(max(0, int(c * 0.65)) for c in color)
+            for j, spur in enumerate(sig.spurs):
+                self._draw_impulse(spur.frequency, spur.power_dbm,
+                                   color=spur_color,
+                                   name=f"{label} spur {j+1}",
+                                   is_carrier=False,
+                                   tooltip=f"{spur.frequency/1e9:.4f} GHz",
+                                   legend_name=None)
+
+            part = f"{label}: {fc/1e9:.4f} GHz @ {pw:.1f} dBm"
+            if sig_nf is not None:
+                part += f" | NF floor {sig_nf:.1f} dBm"
+            if sig.snr_db is not None:
+                part += f" | SNR {sig.snr_db:.1f} dB"
+            info_parts.append(part)
+
+        self._info_label.setText("   ·   ".join(info_parts))
+
+        # ---- Set axis ranges explicitly ----
+        self._plot_widget.setYRange(y_min, y_max, padding=0)
+        self._plot_widget.setXRange(x_draw_min, x_draw_max, padding=0.02)
+
+        if len(valid) == 1:
+            lbl, sig = valid[0]
+            self._wire_label.setText(lbl)
+            self._plot_widget.setTitle(f"Spectrum — {lbl}")
+
+    def _draw_impulse(self, freq: float, power_dbm: float, color: Tuple, name: str,
+                      is_carrier: bool = False, tooltip: str = "",
+                      legend_name: Optional[str] = ...) -> None:
         """
         Draw a vertical impulse line with enhanced styling.
+
+        Parameters
+        ----------
+        legend_name : str or None or Ellipsis
+            If Ellipsis (default), use *name* for the legend entry.
+            If None, suppress the legend entry.
+            Otherwise use the given string.
         """
         bottom = self._y_min if self._y_min is not None else power_dbm - 60
+        line_width = 3.0 if is_carrier else 2.0
 
-        # Vertical line (stem) - thicker for carrier
-        line_width = 3 if is_carrier else 2.5
+        # Determine what goes in the legend
+        if legend_name is ...:
+            stem_name = name
+        else:
+            stem_name = legend_name  # None → no legend entry
+
         stem = pg.PlotDataItem(
             [freq, freq], [bottom, power_dbm],
             pen=pg.mkPen(color, width=line_width),
-            name=name,
+            name=stem_name,
         )
         self._plot_widget.addItem(stem)
 
-        # Horizontal tick at top
         tick_width = abs(freq) * 0.008 if freq != 0 else 1e6
         tick = pg.PlotDataItem(
             [freq - tick_width, freq + tick_width], [power_dbm, power_dbm],
             pen=pg.mkPen(color, width=line_width),
         )
         self._plot_widget.addItem(tick)
-        
-        # Dot at peak - larger for carrier
+
         dot_size = 8 if is_carrier else 6
         dot = pg.ScatterPlotItem(
             x=[freq], y=[power_dbm],
@@ -282,10 +420,6 @@ class ActualSpectrumPlot(QWidget):
         )
         dot.setToolTip(f"{name}: {power_dbm:.1f} dBm @ {tooltip if tooltip else freq:.2e} Hz")
         self._plot_widget.addItem(dot)
-
-
-
-
 # ======================================================================= #
 # Frequency Response View - with Source/Sink Selection                    #
 # ======================================================================= #
