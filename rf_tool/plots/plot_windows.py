@@ -639,7 +639,7 @@ class FrequencyComponentEditor(QDialog):
             table.removeRow(index)
 
     def accept(self) -> None:
-        """Persist edited frequency components back to the block before closing."""
+        """Persist edited amplifier/mixer frequency component settings before closing."""
         try:
             if self.block.BLOCK_TYPE == "Amplifier":
                 coeffs = []
@@ -678,8 +678,8 @@ class FrequencyComponentEditor(QDialog):
                 if expressions:
                     self.block.conversion_expressions = expressions
                 self.block.spur_coefficients = coeffs
-        except Exception:
-            pass
+        except Exception as exc:
+            QMessageBox.warning(self, "Frequency Component Editor", f"Could not save component edits:\n{exc}")
         super().accept()
 
     @staticmethod
@@ -875,7 +875,8 @@ def compute_frequency_sweep(
     if stage_networks:
         try:
             total_gain = s21_to_gain_db(cascade_networks(stage_networks))
-        except Exception:
+        except Exception as exc:
+            print(f"compute_frequency_sweep: falling back to additive gains (network cascade failed): {exc}")
             total_gain = np.sum(stage_gain_arrays, axis=0) if stage_gain_arrays else np.zeros(n_points)
 
     total_nf_db = 10.0 * np.log10(np.maximum(total_nf_linear, 1e-300))
