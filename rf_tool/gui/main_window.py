@@ -187,7 +187,7 @@ class MainWindow(QMainWindow):
             label = os.path.basename(path)
             act = QAction(label, self)
             act.setToolTip(path)
-            act.triggered.connect(lambda _checked=False, p=path: self._open_scene_path(p))
+            act.triggered.connect(lambda _checked, p=path: self._open_scene_path(p))
             self._recent_menu.addAction(act)
         self._recent_menu.addSeparator()
         clear_act = QAction("Clear Recent Files", self)
