@@ -284,6 +284,7 @@ def compute_cascade_metrics(blocks: list) -> dict:
         "oip3_dbm"      : output-referred cascaded IP3 (dBm or None)
         "p1db_in_dbm"   : input-referred cascaded P1dB (dBm or None)
         "min_damage_dbm": most restrictive max input power (dBm or None)
+        "max_required_dbm": most restrictive minimum required input power (dBm or None)
         "stage_gains"   : per-stage gain (dB)
         "stage_nfs"     : per-stage noise figure (dB)
         "cumulative_gains": cumulative gain from input to end of each stage (dB)
@@ -296,6 +297,7 @@ def compute_cascade_metrics(blocks: list) -> dict:
             "oip3_dbm": None,
             "p1db_in_dbm": None,
             "min_damage_dbm": None,
+            "max_required_dbm": None,
             "stage_gains": [],
             "stage_nfs": [],
             "cumulative_gains": [],
@@ -316,6 +318,7 @@ def compute_cascade_metrics(blocks: list) -> dict:
 
     # Minimum damage level (max input power) - referred to system input
     min_damage = None
+    max_required = None
     cum_gain = 0.0
     for b in blocks:
         if b.max_input_power_dbm is not None:
@@ -323,6 +326,10 @@ def compute_cascade_metrics(blocks: list) -> dict:
             system_max = b.max_input_power_dbm - cum_gain
             if min_damage is None or system_max < min_damage:
                 min_damage = system_max
+        if b.min_input_power_dbm is not None:
+            system_min = b.min_input_power_dbm - cum_gain
+            if max_required is None or system_min > max_required:
+                max_required = system_min
         cum_gain += b.gain_db
 
     # Cumulative gains
@@ -339,6 +346,7 @@ def compute_cascade_metrics(blocks: list) -> dict:
         "oip3_dbm": cascade_oip3(gains, iip3s),
         "p1db_in_dbm": cascade_p1db(gains, p1dbs_out),
         "min_damage_dbm": min_damage,
+        "max_required_dbm": max_required,
         "stage_gains": gains,
         "stage_nfs": nfs,
         "cumulative_gains": cum_gains,

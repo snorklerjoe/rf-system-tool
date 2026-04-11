@@ -101,8 +101,6 @@ class PropertiesPanel(QWidget):
         if isinstance(b, Attenuator):
             self._add_float_row("Attenuation (dB)", b.attenuation_db, 0, 200,
                                 self._on_attenuation_changed)
-        elif isinstance(b, Mixer):
-            self._add_freq_row("LO Freq (Hz)", b.lo_frequency, self._on_lo_freq_changed)
         elif isinstance(b, SparBlock):
             self._add_file_row("S-param file", b.spar_file or "", self._on_spar_file_changed)
         elif isinstance(b, TransferFnBlock):
@@ -237,14 +235,6 @@ class PropertiesPanel(QWidget):
             self._block.attenuation_db = abs(v)
             self._block.gain_db = -abs(v)
             self._emit_changed()
-
-    def _on_lo_freq_changed(self, v):
-        try:
-            if isinstance(self._block, Mixer):
-                self._block.lo_frequency = float(v)
-                self._emit_changed()
-        except ValueError:
-            pass
 
     def _on_spar_file_changed(self, v):
         if isinstance(self._block, SparBlock):
