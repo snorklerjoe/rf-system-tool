@@ -112,11 +112,16 @@ class GainNFPlot(QWidget):
 
         # Checkbox controls
         ctrl_layout = QHBoxLayout()
-        self._cb_gain = QCheckBox("Gain", checked=True)
-        self._cb_nf = QCheckBox("NF", checked=True)
-        self._cb_p1db = QCheckBox("P1dB (input)", checked=False)
-        self._cb_oip3 = QCheckBox("OIP3", checked=False)
-        self._cb_damage = QCheckBox("Damage Level", checked=False)
+        self._cb_gain = QCheckBox("Gain")
+        self._cb_gain.setChecked(True)
+        self._cb_nf = QCheckBox("NF")
+        self._cb_nf.setChecked(True)
+        self._cb_p1db = QCheckBox("P1dB (input)")
+        self._cb_p1db.setChecked(True)
+        self._cb_oip3 = QCheckBox("OIP3")
+        self._cb_oip3.setChecked(True)
+        self._cb_damage = QCheckBox("Damage Level")
+        self._cb_damage.setChecked(False)
         for cb in (self._cb_gain, self._cb_nf, self._cb_p1db, self._cb_oip3, self._cb_damage):
             cb.stateChanged.connect(self._refresh)
             ctrl_layout.addWidget(cb)

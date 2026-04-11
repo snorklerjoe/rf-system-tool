@@ -561,12 +561,53 @@ class RFCanvasView(QGraphicsView):
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.AnchorUnderMouse)
         self._zoom = 1.0
+        
+        # Touch gestures
+        self.setAttribute(Qt.WA_AcceptTouchEvents, True)
+        self._touch_start_distance = 0.0
+        self._touch_start_zoom = 1.0
 
     def wheelEvent(self, event) -> None:
         factor = 1.15 if event.angleDelta().y() > 0 else 1.0 / 1.15
         self._zoom *= factor
         self._zoom = max(0.1, min(self._zoom, 10.0))
         self.setTransform(QTransform().scale(self._zoom, self._zoom))
+
+    def zoom_in(self) -> None:
+        """Zoom in."""
+        self._zoom = min(self._zoom * 1.2, 10.0)
+        self.setTransform(QTransform().scale(self._zoom, self._zoom))
+
+    def zoom_out(self) -> None:
+        """Zoom out."""
+        self._zoom = max(self._zoom / 1.2, 0.1)
+        self.setTransform(QTransform().scale(self._zoom, self._zoom))
+
+    def zoom_reset(self) -> None:
+        """Reset zoom to 100%."""
+        self._zoom = 1.0
+        self.setTransform(QTransform().scale(1.0, 1.0))
+
+    def zoom_to_fit(self) -> None:
+        """Zoom and pan to fit all items in view."""
+        rect = self.scene().itemsBoundingRect()
+        if not rect.isValid():
+            self._zoom = 1.0
+            self.setTransform(QTransform().scale(1.0, 1.0))
+            return
+        
+        # Add padding
+        rect.adjust(-50, -50, 50, 50)
+        
+        # Calculate zoom to fit
+        view_rect = self.viewport().rect()
+        scale_x = view_rect.width() / rect.width() if rect.width() > 0 else 1.0
+        scale_y = view_rect.height() / rect.height() if rect.height() > 0 else 1.0
+        self._zoom = min(scale_x, scale_y, 10.0)
+        self._zoom = max(self._zoom, 0.1)
+        
+        self.setTransform(QTransform().scale(self._zoom, self._zoom))
+        self.fitInView(rect, Qt.KeepAspectRatio)
 
     def keyPressEvent(self, event) -> None:
         if event.key() == Qt.Key_Delete:
@@ -586,5 +627,36 @@ class RFCanvasView(QGraphicsView):
         elif event.key() == Qt.Key_0:
             self._zoom = 1.0
             self.setTransform(QTransform().scale(1.0, 1.0))
+        elif event.key() == Qt.Key_Home:
+            self.zoom_to_fit()
         else:
             super().keyPressEvent(event)
+
+    def touchEvent(self, event) -> bool:
+        """Handle touch events for multi-touch gestures (pinch-to-zoom, pan)."""
+        if event.touchPoints().count() == 2:
+            # Two-finger pinch-to-zoom
+            touch_points = event.touchPoints()
+            p1 = touch_points[0].screenPos()
+            p2 = touch_points[1].screenPos()
+            distance = math.sqrt((p2.x() - p1.x()) ** 2 + (p2.y() - p1.y()) ** 2)
+            
+            if event.type() == 0:  # TouchBegin
+                self._touch_start_distance = distance
+                self._touch_start_zoom = self._zoom
+            elif event.type() == 1:  # TouchUpdate
+                if self._touch_start_distance > 0:
+                    scale_factor = distance / self._touch_start_distance
+                    new_zoom = self._touch_start_zoom * scale_factor
+                    new_zoom = max(0.1, min(new_zoom, 10.0))
+                    self._zoom = new_zoom
+                    self.setTransform(QTransform().scale(self._zoom, self._zoom))
+            return True
+        elif event.touchPoints().count() == 1:
+            # Single-finger pan
+            touch_point = event.touchPoints()[0]
+            if event.type() == 1:  # TouchUpdate
+                delta = touch_point.screenPos() - touch_point.lastScreenPos()
+                self.translate(delta.x(), delta.y())
+            return True
+        return False

@@ -493,6 +493,8 @@ class PowerSplitter(RFBlock):
         kwargs["gain_db"] = split_loss_db
         kwargs.setdefault("nf_db", abs(split_loss_db))
         super().__init__(**kwargs)
+        # For combiners: buffer signals from all inputs to combine them
+        self._combine_buffer: Dict[str, Signal] = {}
 
     def set_n_ways(self, n_ways: int) -> None:
         """Update split/combine ways and rebuild dynamic ports and loss settings."""
@@ -511,10 +513,50 @@ class PowerSplitter(RFBlock):
             self._output_ports = [Port(f"OUT{i}", "output", i) for i in range(self.n_ways)]
 
     def process(self, signal: Signal, port_name: str = "IN") -> Dict[str, Signal]:
-        out = signal.apply_gain(self.gain_db)
         if self.is_combiner:
-            return {"OUT": out}
-        return {f"OUT{i}": out.copy() for i in range(self.n_ways)}
+            # Store signal from this input port
+            self._combine_buffer[port_name] = signal
+            
+            # Combine all currently buffered signals (process any available inputs, don't wait for all)
+            if self._combine_buffer:
+                combined = None
+                for input_port in sorted(self._combine_buffer.keys()):
+                    sig = self._combine_buffer[input_port]
+                    if combined is None:
+                        combined = sig.copy()
+                    else:
+                        # Merge signals: add power in linear domain
+                        p_total_mw = (10.0 ** (combined.power_dbm / 10.0)) + (10.0 ** (sig.power_dbm / 10.0))
+                        combined.power_dbm = 10.0 * math.log10(max(p_total_mw, 1e-300))
+                        # Merge spurs
+                        for spur in sig.spurs:
+                            found = False
+                            for c_spur in combined.spurs:
+                                if abs(c_spur.frequency - spur.frequency) < 1e-3:
+                                    spur_mw = (10.0 ** (c_spur.power_dbm / 10.0)) + (10.0 ** (spur.power_dbm / 10.0))
+                                    c_spur.power_dbm = 10.0 * math.log10(max(spur_mw, 1e-300))
+                                    found = True
+                                    break
+                            if not found:
+                                combined.spurs.append(spur.copy())
+                        # Merge SNR
+                        combined_mw = 10.0 ** (combined.power_dbm / 10.0)
+                        sig_mw = 10.0 ** (sig.power_dbm / 10.0)
+                        if combined.snr_db is not None and sig.snr_db is not None:
+                            noise_combined = combined_mw / (10.0 ** (combined.snr_db / 10.0))
+                            noise_sig = sig_mw / (10.0 ** (sig.snr_db / 10.0))
+                            total_noise = noise_combined + noise_sig
+                            total_signal = combined_mw + sig_mw
+                            combined.snr_db = 10.0 * math.log10(total_signal / max(total_noise, 1e-300))
+                
+                # Apply gain to combined signal
+                out = combined.apply_gain(self.gain_db)
+                return {"OUT": out}
+            else:
+                return {}
+        else:
+            out = signal.apply_gain(self.gain_db)
+            return {f"OUT{i}": out.copy() for i in range(self.n_ways)}
 
     def to_dict(self) -> dict:
         d = super().to_dict()

@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 # ======================================================================= #
 
 PORT_RADIUS = 6.0
-PORT_HIT_RADIUS = 10.0
+PORT_HIT_RADIUS = 14.0  # Increased for better touch targeting
 
 
 class PortItem(QGraphicsObject):

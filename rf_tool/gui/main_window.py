@@ -86,7 +86,9 @@ class MainWindow(QMainWindow):
     def _setup_toolbar(self) -> None:
         tb = self.addToolBar("Blocks")
         tb.setMovable(False)
-
+        # Make toolbar more touch-friendly with larger icons
+        tb.setIconSize(tb.iconSize().__mul__(1.3))
+        
         block_actions = [
             ("Amplifier",    "▶ Amp",    self._add_amplifier),
             ("Attenuator",   "⬡ Att",    self._add_attenuator),
@@ -131,6 +133,19 @@ class MainWindow(QMainWindow):
         prop_act.setToolTip("Propagate Signals")
         prop_act.triggered.connect(self._propagate_signals)
         tb.addAction(prop_act)
+
+        tb.addSeparator()
+
+        # View actions
+        zoom_fit_act = QAction("🔍 Fit", self, shortcut="Home")
+        zoom_fit_act.setToolTip("Zoom to Fit All (Home)")
+        zoom_fit_act.triggered.connect(self._zoom_to_fit)
+        tb.addAction(zoom_fit_act)
+
+    def _zoom_to_fit(self) -> None:
+        """Fit all items in view."""
+        self._view.zoom_to_fit()
+        self._status.showMessage("Zoomed to fit")
 
     def _setup_menu(self) -> None:
         menubar = self.menuBar()
@@ -210,6 +225,21 @@ class MainWindow(QMainWindow):
         analysis_menu.addAction(act_freq)
         analysis_menu.addSeparator()
         analysis_menu.addAction(act_prop)
+
+        # View menu
+        view_menu = menubar.addMenu("&View")
+        act_zoom_fit = QAction("Zoom to &Fit", self, shortcut="Home")
+        act_zoom_fit.triggered.connect(self._zoom_to_fit)
+        act_zoom_in = QAction("Zoom &In", self, shortcut=QKeySequence.ZoomIn)
+        act_zoom_in.triggered.connect(lambda: self._view.zoom_in())
+        act_zoom_out = QAction("Zoom &Out", self, shortcut=QKeySequence.ZoomOut)
+        act_zoom_out.triggered.connect(lambda: self._view.zoom_out())
+        act_zoom_reset = QAction("&Reset Zoom", self, shortcut="0")
+        act_zoom_reset.triggered.connect(lambda: self._view.zoom_reset())
+        view_menu.addAction(act_zoom_fit)
+        view_menu.addAction(act_zoom_in)
+        view_menu.addAction(act_zoom_out)
+        view_menu.addAction(act_zoom_reset)
 
     def _setup_status_bar(self) -> None:
         self._status = QStatusBar()
