@@ -9,6 +9,7 @@ FrequencyResponseView - Frequency response with source/sink selection
 from __future__ import annotations
 
 import math
+import logging
 from typing import List, Optional, Dict, Tuple, Any
 
 import numpy as np
@@ -25,6 +26,7 @@ from PySide6.QtGui import QColor
 import pyqtgraph as pg
 pg.setConfigOption("background", "k")
 pg.setConfigOption("foreground", "w")
+logger = logging.getLogger(__name__)
 
 
 # ======================================================================= #
@@ -832,6 +834,10 @@ def compute_frequency_sweep(
     """
     from rf_tool.engine.cascade import db_to_linear_power, cascade_networks, s21_to_gain_db
     from rf_tool.blocks.components import SparBlock, TransferFnBlock, LowPassFilter, HighPassFilter
+    try:
+        import skrf  # type: ignore
+    except ImportError:
+        skrf = None
 
     freqs = np.linspace(freq_start, freq_stop, n_points)
     total_gain = np.zeros(n_points)
@@ -859,12 +865,14 @@ def compute_frequency_sweep(
         s = np.zeros((n_points, 2, 2), dtype=complex)
         s[:, 1, 0] = s21_mag
         s[:, 0, 1] = s21_mag
-        try:
-            import skrf
-            freq_obj = skrf.Frequency.from_f(freqs, unit="hz")
-            stage_networks.append(skrf.Network(frequency=freq_obj, s=s))
-        except Exception:
-            stage_networks = []
+        if skrf is not None:
+            try:
+                freq_obj = skrf.Frequency.from_f(freqs, unit="hz")
+                stage_networks.append(skrf.Network(frequency=freq_obj, s=s))
+            except Exception as exc:
+                logger.warning("compute_frequency_sweep: disabling network cascade fallback due to stage build error: %s", exc)
+                stage_networks = []
+                skrf = None
 
         # Friis NF update: F_total += (F_block - 1) / cum_gain
         F_block = db_to_linear_power(block.nf_db)
@@ -876,7 +884,7 @@ def compute_frequency_sweep(
         try:
             total_gain = s21_to_gain_db(cascade_networks(stage_networks))
         except Exception as exc:
-            print(f"compute_frequency_sweep: falling back to additive gains (network cascade failed): {exc}")
+            logger.warning("compute_frequency_sweep: falling back to additive gains (network cascade failed): %s", exc)
             total_gain = np.sum(stage_gain_arrays, axis=0) if stage_gain_arrays else np.zeros(n_points)
 
     total_nf_db = 10.0 * np.log10(np.maximum(total_nf_linear, 1e-300))

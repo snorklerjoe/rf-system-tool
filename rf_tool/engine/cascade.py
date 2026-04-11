@@ -284,7 +284,7 @@ def compute_cascade_metrics(blocks: list) -> dict:
         "oip3_dbm"      : output-referred cascaded IP3 (dBm or None)
         "p1db_in_dbm"   : input-referred cascaded P1dB (dBm or None)
         "min_damage_dbm": most restrictive max input power (dBm or None)
-        "max_required_dbm": most restrictive minimum required input power (dBm or None)
+        "max_required_dbm": highest input floor from stage min-input limits, referred to system input (dBm or None)
         "stage_gains"   : per-stage gain (dB)
         "stage_nfs"     : per-stage noise figure (dB)
         "cumulative_gains": cumulative gain from input to end of each stage (dB)

@@ -192,7 +192,7 @@ class Mixer(RFBlock):
             m = cls._eval_freq_expr(expr, 1.0, 0.0)
             n = cls._eval_freq_expr(expr, 0.0, 1.0)
             c = cls._eval_freq_expr(expr, 0.0, 0.0)
-        except Exception:
+        except (ValueError, TypeError, SyntaxError, NameError):
             return None
         if abs(c) > 1e-12:
             return None
