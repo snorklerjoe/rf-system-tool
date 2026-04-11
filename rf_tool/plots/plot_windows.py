@@ -241,18 +241,13 @@ class ActualSpectrumPlot(QWidget):
         self._plot_widget.setTitle(
             f"Spectrum at {wire_desc} — Carrier: {fc/1e9:.4f} GHz @ {pw:.1f} dBm"
         )
-        self._info_label.setText(
-            (
-                f"Carrier: {fc/1e9:.4f} GHz @ {pw:.1f} dBm | "
-                f"Noise floor: {noise_floor:.1f} dBm | SNR: {signal.snr_db:.1f} dB | Spurs: {len(signal.spurs)}"
-                if signal.snr_db is not None and noise_floor is not None else
-                f"Carrier: {fc/1e9:.4f} GHz @ {pw:.1f} dBm | SNR: {signal.snr_db:.1f} dB | Spurs: {len(signal.spurs)}"
-                if signal.snr_db is not None else
-                f"Carrier: {fc/1e9:.4f} GHz @ {pw:.1f} dBm | Noise floor: {noise_floor:.1f} dBm | Spurs: {len(signal.spurs)}"
-                if noise_floor is not None else
-                f"Carrier: {fc/1e9:.4f} GHz @ {pw:.1f} dBm | Spurs: {len(signal.spurs)}"
-            )
-        )
+        parts = [f"Carrier: {fc/1e9:.4f} GHz @ {pw:.1f} dBm"]
+        if noise_floor is not None:
+            parts.append(f"Noise floor: {noise_floor:.1f} dBm")
+        if signal.snr_db is not None:
+            parts.append(f"SNR: {signal.snr_db:.1f} dB")
+        parts.append(f"Spurs: {len(signal.spurs)}")
+        self._info_label.setText(" | ".join(parts))
 
     def _draw_impulse(self, freq: float, power_dbm: float, color: Tuple, name: str, 
                      is_carrier: bool = False, tooltip: str = "") -> None:
@@ -641,7 +636,7 @@ class FrequencyComponentEditor(QDialog):
             table.removeRow(index)
 
     def accept(self) -> None:
-        """Persist edited amplifier/mixer frequency component settings before closing."""
+        """Persist edited frequency-component settings for supported block types before closing."""
         try:
             if self.block.BLOCK_TYPE == "Amplifier":
                 coeffs = []
