@@ -11,7 +11,7 @@ Every component:
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 import uuid
 
 
@@ -105,6 +105,7 @@ class RFBlock:
         # Ports are defined by subclasses
         self._input_ports: List[Port] = []
         self._output_ports: List[Port] = []
+        self._runtime_messages: List[Tuple[str, str]] = []
         self._setup_ports()
 
     # ------------------------------------------------------------------ #
@@ -145,6 +146,20 @@ class RFBlock:
             p_spur = signal.power_dbm + self.gain_db + rel_db
             out.add_spur(f_spur, p_spur)
         return {"OUT": out}
+
+    def log_runtime_message(self, message: str, level: str = "info") -> None:
+        """Queue a transient runtime message produced during processing."""
+        self._runtime_messages.append((level, message))
+
+    def pop_runtime_messages(self) -> List[Tuple[str, str]]:
+        """Return and clear queued runtime messages."""
+        msgs = list(self._runtime_messages)
+        self._runtime_messages.clear()
+        return msgs
+
+    def reset_runtime_state(self) -> None:
+        """Reset transient processing state before a propagation pass."""
+        self._runtime_messages.clear()
 
     # ------------------------------------------------------------------ #
     # Power validation                                                     #

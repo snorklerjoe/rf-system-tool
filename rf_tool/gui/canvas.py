@@ -11,7 +11,7 @@ Handles:
 from __future__ import annotations
 
 import math
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Callable
 
 from PySide6.QtWidgets import (
     QGraphicsScene, QGraphicsView,
@@ -212,7 +212,7 @@ class RFScene(QGraphicsScene):
         selected_wires = [item for item in self.selectedItems() if isinstance(item, WireItem)]
         selected_blocks = [item for item in self.selectedItems() if isinstance(item, BlockItem)]
 
-        if len(selected_wires) == 1 and not selected_blocks:
+        if len(selected_wires) >= 1 and not selected_blocks:
             wire = selected_wires[0]
             src_bid = wire.src_port.parentItem().block.block_id
             dst_bid = wire.dst_port.parentItem().block.block_id
@@ -464,7 +464,7 @@ class RFScene(QGraphicsScene):
             connection["dst_port"],
         )
 
-    def propagate_signals(self) -> Dict[str, "RFSignal"]:
+    def propagate_signals(self, message_callback: Optional[Callable[[str, str], None]] = None) -> Dict[str, "RFSignal"]:
         """
         Propagate signals from Source blocks through the graph.
 
@@ -474,6 +474,8 @@ class RFScene(QGraphicsScene):
         """
         from rf_tool.blocks.components import Source
         signals_at: Dict[str, Dict[str, RFSignal]] = {}
+        for item in self._block_items.values():
+            item.block.reset_runtime_state()
 
         # Build adjacency: src_bid/src_port -> (dst_bid, dst_port)
         adj: Dict[Tuple, List[Tuple]] = {}
@@ -535,6 +537,9 @@ class RFScene(QGraphicsScene):
                     result = {p.name: merged_in.copy() for p in dst_item.block.output_ports}
                 else:
                     result = dst_item.block.process(merged_in, dst_port)
+                    if message_callback is not None:
+                        for level, message in dst_item.block.pop_runtime_messages():
+                            message_callback(message, level)
                     for out_sig in result.values():
                         in_noise_floor = merged_in.get_noise_floor_dbm()
                         if in_noise_floor is not None:

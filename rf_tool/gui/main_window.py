@@ -11,7 +11,7 @@ import copy
 
 from PySide6.QtWidgets import (
     QMainWindow, QDockWidget, QToolBar, QStatusBar,
-    QFileDialog, QMessageBox, QWidget, QLabel, QMenu, QApplication,
+    QFileDialog, QMessageBox, QWidget, QLabel, QMenu, QApplication, QTextEdit,
 )
 from PySide6.QtGui import QAction, QKeySequence, QBrush, QColor
 from PySide6.QtCore import Qt, QPointF, QSettings
@@ -60,6 +60,7 @@ class MainWindow(QMainWindow):
         self._setup_scene()
         self._setup_dock_properties()
         self._setup_dock_metrics()
+        self._setup_dock_messages()
         self._setup_toolbar()
         self._setup_menu()
         self._setup_status_bar()
@@ -108,6 +109,19 @@ class MainWindow(QMainWindow):
         dock.setWidget(self._metrics_panel)
         self.addDockWidget(Qt.RightDockWidgetArea, dock)
         self.splitDockWidget(self._properties_dock, dock, Qt.Vertical)
+
+    def _setup_dock_messages(self) -> None:
+        dock = QDockWidget("Messages", self)
+        dock.setObjectName("messagesDock")
+        dock.setAllowedAreas(Qt.BottomDockWidgetArea)
+        self._messages_console = QTextEdit()
+        self._messages_console.setReadOnly(True)
+        self._messages_console.setStyleSheet(
+            "QTextEdit { background: #11151f; color: #D0D0D0; font-family: Consolas, Menlo, monospace; }"
+        )
+        dock.setWidget(self._messages_console)
+        self.addDockWidget(Qt.BottomDockWidgetArea, dock)
+        self._messages_dock = dock
 
     def _setup_toolbar(self) -> None:
         tb = self.addToolBar("Ribbon")
@@ -325,6 +339,15 @@ class MainWindow(QMainWindow):
         self._status = QStatusBar()
         self.setStatusBar(self._status)
         self._status.showMessage("Ready")
+
+    def _append_runtime_message(self, message: str, level: str = "info") -> None:
+        color = "#E8C35E" if level == "warning" else "#D0D0D0"
+        safe = (
+            message.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+        )
+        self._messages_console.append(f'<span style="color:{color};">{safe}</span>')
 
     # ------------------------------------------------------------------ #
     # Add block helpers                                                    #
@@ -582,10 +605,12 @@ class MainWindow(QMainWindow):
     # Propagate signals                                                    #
     # ------------------------------------------------------------------ #
     def _propagate_signals(self) -> None:
-        signals = self._scene.propagate_signals()
+        self._append_runtime_message("Starting signal propagation...")
+        signals = self._scene.propagate_signals(self._append_runtime_message)
         n_blocks = len(signals)
         self._update_metrics_panel()
         self._status.showMessage(f"Propagated signals through {n_blocks} blocks")
+        self._append_runtime_message(f"Propagation complete across {n_blocks} blocks.")
 
         # If a sink is selected and has a signal, show spectrum
         selected = self._scene.selectedItems()
@@ -641,22 +666,39 @@ class MainWindow(QMainWindow):
     def _on_wire_selected(self, src_bid: str, src_port: str, dst_bid: str, dst_port: str) -> None:
         """Handle wire selection - show its spectrum in the persistent viewer."""
         signals_at = self._scene.propagate_signals()
-
-        if dst_bid not in signals_at or dst_port not in signals_at[dst_bid]:
-            return
-
-        signal = signals_at[dst_bid][dst_port]
-
-        src_item = self._scene.get_block_item(src_bid)
-        dst_item = self._scene.get_block_item(dst_bid)
-        src_label = src_item.block.label if src_item else "Source"
-        dst_label = dst_item.block.label if dst_item else "Dest"
-
+        selected_wires = self._scene.get_selected_wires()
         if self._spectrum_plot is None:
             self._spectrum_plot = ActualSpectrumPlot(None)
             self._spectrum_plot.setAttribute(Qt.WA_DeleteOnClose, False)
 
-        self._spectrum_plot.set_signal_from_wire(signal, src_label, dst_label, dst_port)
+        if len(selected_wires) > 1:
+            overlays = []
+            for wire in selected_wires:
+                s_bid = wire.src_port.parentItem().block.block_id
+                d_bid = wire.dst_port.parentItem().block.block_id
+                s_port = wire.src_port.port.name
+                d_port = wire.dst_port.port.name
+                sig = signals_at.get(d_bid, {}).get(d_port)
+                if sig is None:
+                    continue
+                s_item = self._scene.get_block_item(s_bid)
+                d_item = self._scene.get_block_item(d_bid)
+                s_lbl = s_item.block.label if s_item else "Source"
+                d_lbl = d_item.block.label if d_item else "Dest"
+                overlays.append((f"{s_lbl}:{s_port} → {d_lbl}:{d_port}", sig))
+            if overlays:
+                self._spectrum_plot.set_multi_signals(overlays)
+                self._spectrum_plot._wire_label.setText("Multi-wire selection")
+                self._spectrum_plot._plot_widget.setTitle("Signal Spectrum — Multiple Wires")
+        else:
+            if dst_bid not in signals_at or dst_port not in signals_at[dst_bid]:
+                return
+            signal = signals_at[dst_bid][dst_port]
+            src_item = self._scene.get_block_item(src_bid)
+            dst_item = self._scene.get_block_item(dst_bid)
+            src_label = src_item.block.label if src_item else "Source"
+            dst_label = dst_item.block.label if dst_item else "Dest"
+            self._spectrum_plot.set_signal_from_wire(signal, src_label, dst_label, dst_port)
         self._spectrum_plot.show()
         self._spectrum_plot.raise_()
         self._spectrum_plot.activateWindow()
@@ -782,6 +824,10 @@ class MainWindow(QMainWindow):
         eff_blocks = self._effective_blocks(path_blocks)
         metrics = compute_cascade_metrics(eff_blocks)
         stage_labels = [f"{b.BLOCK_TYPE}: {b.label}" for b in eff_blocks]
+        self._append_runtime_message(
+            f"P2P cascade {labels[start_id]} → {labels[end_id]}: "
+            f"Gain {metrics.get('gain_db', 0.0):.2f} dB, NF {metrics.get('nf_db', 0.0):.2f} dB."
+        )
 
         dlg = CascadeReadoutDialog(
             metrics,
@@ -805,6 +851,10 @@ class MainWindow(QMainWindow):
             return
         data = compute_frequency_sweep(eff_blocks)
         metrics = compute_cascade_metrics(eff_blocks)
+        self._append_runtime_message(
+            f"Frequency plot computed for {len(eff_blocks)} blocks: "
+            f"Gain {metrics.get('gain_db', 0.0):.2f} dB, NF {metrics.get('nf_db', 0.0):.2f} dB."
+        )
 
         win = GainNFPlot(None)
         win.set_data(

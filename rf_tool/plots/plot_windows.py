@@ -115,6 +115,7 @@ class SpectrumPlot(QWidget):
 
         self._current_signal = None
         self._y_min = None
+        self._impulse_floor = None
         self._full_x_range: Optional[Tuple[float, float]] = None
 
     def _set_range_controls_ghz(self, start_hz: float, stop_hz: float) -> None:
@@ -182,8 +183,10 @@ class SpectrumPlot(QWidget):
         # Noise floor must always be the bottom of the display
         if noise_floor is not None:
             y_min = noise_floor - 5.0
+            self._impulse_floor = noise_floor
         else:
             y_min = min_power - 10.0
+            self._impulse_floor = y_min
         y_max = max_power + max(10.0, abs(max_power - y_min) * 0.1)
         self._y_min = y_min
 
@@ -226,7 +229,7 @@ class SpectrumPlot(QWidget):
     def _draw_impulse(self, freq: float, power_dbm: float, color: Tuple, name: str,
                       tooltip: str = "", x_span: float = 1e6) -> None:
         """Draw an impulse as an inverted-T stem (vertical line + base cap)."""
-        bottom = self._y_min if self._y_min is not None else power_dbm - 60
+        bottom = self._impulse_floor if self._impulse_floor is not None else power_dbm - 60
 
         stem = pg.PlotDataItem(
             [freq, freq], [bottom, power_dbm],
@@ -311,6 +314,7 @@ class ActualSpectrumPlot(QWidget):
         self._all_signals_with_labels: List[Tuple[str, Any]] = []
         self._full_x_range: Optional[Tuple[float, float]] = None
         self._y_min = None
+        self._impulse_floor = None
 
     def _set_range_controls_ghz(self, start_hz: float, stop_hz: float) -> None:
         self._start_freq.blockSignals(True)
@@ -426,8 +430,10 @@ class ActualSpectrumPlot(QWidget):
         # Noise floor is always the lowest thing on the display
         if noise_floor is not None:
             y_min = noise_floor - 5.0
+            self._impulse_floor = noise_floor
         else:
             y_min = min_power - 10.0
+            self._impulse_floor = y_min
         y_max = max_power + max(10.0, abs(max_power - y_min) * 0.1)
         self._y_min = y_min
 
@@ -503,7 +509,7 @@ class ActualSpectrumPlot(QWidget):
             If None, suppress the legend entry.
             Otherwise use the given string.
         """
-        bottom = self._y_min if self._y_min is not None else power_dbm - 60
+        bottom = self._impulse_floor if self._impulse_floor is not None else power_dbm - 60
         line_width = 3.0 if is_carrier else 2.0
 
         # Determine what goes in the legend

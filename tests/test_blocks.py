@@ -549,6 +549,38 @@ class TestPowerCombiner:
         c2 = PowerCombiner.from_dict(c.to_dict())
         assert c2.n_ways == 4
 
+    def test_combiner_preserves_distinct_input_frequencies(self):
+        c = PowerCombiner(n_ways=3)
+        s1 = make_signal(fc=1.0e9, pwr=0.0)
+        s2 = make_signal(fc=1.2e9, pwr=0.0)
+        s3 = make_signal(fc=1.4e9, pwr=0.0)
+        c.process(s1, "IN0")
+        c.process(s2, "IN1")
+        out = c.process(s3, "IN2")["OUT"]
+        freqs = sorted([out.carrier_frequency] + [s.frequency for s in out.spurs])
+        assert freqs == pytest.approx([1.0e9, 1.2e9, 1.4e9])
+
+    def test_combiner_output_total_power_scales_with_active_inputs(self):
+        c = PowerCombiner(n_ways=3)
+        s1 = make_signal(fc=1.0e9, pwr=0.0)
+        s2 = make_signal(fc=1.2e9, pwr=0.0)
+        out_two = c.process(s1, "IN0")["OUT"]
+        out_two = c.process(s2, "IN1")["OUT"]
+        c.reset_runtime_state()
+        out_three = c.process(s1, "IN0")["OUT"]
+        out_three = c.process(s2, "IN1")["OUT"]
+        out_three = c.process(make_signal(fc=1.4e9, pwr=0.0), "IN2")["OUT"]
+        delta_db = out_three.total_power_dbm() - out_two.total_power_dbm()
+        assert delta_db == pytest.approx(10.0 * math.log10(3.0 / 2.0), abs=1e-6)
+
+    def test_combiner_logs_constructive_sum_warning(self):
+        c = PowerCombiner(n_ways=3)
+        c.process(make_signal(fc=1.0e9, pwr=-3.0), "IN0")
+        c.process(make_signal(fc=1.0e9, pwr=-3.0), "IN1")
+        _ = c.process(make_signal(fc=2.0e9, pwr=-3.0), "IN2")
+        msgs = c.pop_runtime_messages()
+        assert any(level == "warning" and "constructive summation" in msg for level, msg in msgs)
+
 
 # ======================================================================= #
 # Switch                                                                   #

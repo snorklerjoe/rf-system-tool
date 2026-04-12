@@ -587,48 +587,77 @@ class PowerSplitter(RFBlock):
             self._input_ports = [Port("IN", "input", 0)]
             self._output_ports = [Port(f"OUT{i}", "output", i) for i in range(self.n_ways)]
 
+    def reset_runtime_state(self) -> None:
+        super().reset_runtime_state()
+        self._combine_buffer.clear()
+
     def process(self, signal: Signal, port_name: str = "IN") -> Dict[str, Signal]:
         if self.is_combiner:
             # Store signal from this input port
-            self._combine_buffer[port_name] = signal
-            
-            # Combine all currently buffered signals (process any available inputs, don't wait for all)
-            if self._combine_buffer:
-                combined = None
-                for input_port in sorted(self._combine_buffer.keys()):
-                    sig = self._combine_buffer[input_port]
-                    if combined is None:
-                        combined = sig.copy()
-                    else:
-                        # Merge signals: add power in linear domain
-                        p_total_mw = (10.0 ** (combined.power_dbm / 10.0)) + (10.0 ** (sig.power_dbm / 10.0))
-                        combined.power_dbm = 10.0 * math.log10(max(p_total_mw, 1e-300))
-                        # Merge spurs
-                        for spur in sig.spurs:
-                            found = False
-                            for c_spur in combined.spurs:
-                                if abs(c_spur.frequency - spur.frequency) < 1e-3:
-                                    spur_mw = (10.0 ** (c_spur.power_dbm / 10.0)) + (10.0 ** (spur.power_dbm / 10.0))
-                                    c_spur.power_dbm = 10.0 * math.log10(max(spur_mw, 1e-300))
-                                    found = True
-                                    break
-                            if not found:
-                                combined.spurs.append(spur.copy())
-                        # Merge SNR
-                        combined_mw = 10.0 ** (combined.power_dbm / 10.0)
-                        sig_mw = 10.0 ** (sig.power_dbm / 10.0)
-                        if combined.snr_db is not None and sig.snr_db is not None:
-                            noise_combined = combined_mw / (10.0 ** (combined.snr_db / 10.0))
-                            noise_sig = sig_mw / (10.0 ** (sig.snr_db / 10.0))
-                            total_noise = noise_combined + noise_sig
-                            total_signal = combined_mw + sig_mw
-                            combined.snr_db = 10.0 * math.log10(total_signal / max(total_noise, 1e-300))
-                
-                # Apply gain to combined signal
-                out = combined.apply_gain(self.gain_db)
-                return {"OUT": out}
-            else:
+            self._combine_buffer[port_name] = signal.copy()
+            if not self._combine_buffer:
                 return {}
+
+            tone_bins: List[Tuple[float, float]] = []
+            constructive_freqs: set[float] = set()
+
+            def _accumulate_tone(freq_hz: float, power_dbm: float) -> None:
+                power_mw = 10.0 ** (power_dbm / 10.0)
+                for idx, (f_hz, p_mw) in enumerate(tone_bins):
+                    if abs(f_hz - freq_hz) < 1e-3:
+                        constructive_freqs.add(f_hz)
+                        tone_bins[idx] = (f_hz, p_mw + power_mw)
+                        return
+                tone_bins.append((freq_hz, power_mw))
+
+            noise_terms_mw: List[float] = []
+            total_signal_mw = 0.0
+            total_noise_from_snr_mw = 0.0
+            snr_complete = True
+
+            for sig in self._combine_buffer.values():
+                _accumulate_tone(sig.carrier_frequency, sig.power_dbm)
+                for spur in sig.spurs:
+                    _accumulate_tone(spur.frequency, spur.power_dbm)
+
+                nf = sig.get_noise_floor_dbm()
+                if nf is not None:
+                    noise_terms_mw.append(10.0 ** (nf / 10.0))
+
+                sig_total_mw = 10.0 ** (sig.total_power_dbm() / 10.0)
+                total_signal_mw += sig_total_mw
+                if sig.snr_db is None:
+                    snr_complete = False
+                else:
+                    total_noise_from_snr_mw += sig_total_mw / (10.0 ** (sig.snr_db / 10.0))
+
+            if not tone_bins:
+                return {}
+
+            combined_tones = sorted(
+                [(f_hz, 10.0 * math.log10(max(p_mw, 1e-300))) for f_hz, p_mw in tone_bins],
+                key=lambda tone: tone[1],
+                reverse=True,
+            )
+            carrier_f, carrier_p = combined_tones[0]
+            out = Signal(carrier_frequency=carrier_f, power_dbm=carrier_p, spurs=[])
+            for f_hz, p_dbm in combined_tones[1:]:
+                out.add_spur(f_hz, p_dbm)
+
+            if noise_terms_mw:
+                out.set_noise_floor_dbm(10.0 * math.log10(max(sum(noise_terms_mw), 1e-300)))
+            elif snr_complete and total_signal_mw > 0.0 and total_noise_from_snr_mw > 0.0:
+                out.snr_db = 10.0 * math.log10(total_signal_mw / total_noise_from_snr_mw)
+
+            out = out.apply_gain(self.gain_db)
+
+            if constructive_freqs:
+                freqs_ghz = ", ".join(f"{f/1e9:.6g} GHz" for f in sorted(constructive_freqs))
+                self.log_runtime_message(
+                    f"{self.label}: in-phase constructive summation applied at {freqs_ghz}.",
+                    level="warning",
+                )
+            return {"OUT": out}
         else:
             out = signal.apply_gain(self.gain_db)
             return {f"OUT{i}": out.copy() for i in range(self.n_ways)}
