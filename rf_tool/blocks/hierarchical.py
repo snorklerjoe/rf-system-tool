@@ -168,7 +168,9 @@ def _signals_equivalent(a: Optional[Signal], b: Optional[Signal]) -> bool:
         return False
     if len(a.spurs) != len(b.spurs):
         return False
-    for sa, sb in zip(a.spurs, b.spurs):
+    a_spurs = sorted(a.spurs, key=lambda s: (s.frequency, s.power_dbm))
+    b_spurs = sorted(b.spurs, key=lambda s: (s.frequency, s.power_dbm))
+    for sa, sb in zip(a_spurs, b_spurs):
         if abs(sa.frequency - sb.frequency) > 1e-6 or abs(sa.power_dbm - sb.power_dbm) > 1e-6:
             return False
     return True
@@ -178,20 +180,32 @@ def _merge_signals(existing: Optional[Signal], incoming: Signal) -> Signal:
     """Power-combine two signals at the same node, including spurs/noise."""
     if existing is None:
         return incoming.copy()
-    out = existing.copy()
-    p_total_mw = (10.0 ** (existing.power_dbm / 10.0)) + (10.0 ** (incoming.power_dbm / 10.0))
-    out.power_dbm = 10.0 * math.log10(max(p_total_mw, _MIN_POWER_MW))
+    tone_bins: List[Tuple[float, float]] = []
 
+    def _add_tone(freq_hz: float, power_dbm: float) -> None:
+        power_mw = 10.0 ** (power_dbm / 10.0)
+        for i, (f_hz, p_mw) in enumerate(tone_bins):
+            if abs(f_hz - freq_hz) < 1e-3:
+                tone_bins[i] = (f_hz, p_mw + power_mw)
+                return
+        tone_bins.append((freq_hz, power_mw))
+
+    _add_tone(existing.carrier_frequency, existing.power_dbm)
+    for spur in existing.spurs:
+        _add_tone(spur.frequency, spur.power_dbm)
+    _add_tone(incoming.carrier_frequency, incoming.power_dbm)
     for spur in incoming.spurs:
-        found = False
-        for existing_spur in out.spurs:
-            if abs(existing_spur.frequency - spur.frequency) < 1e-3:
-                spur_mw = (10.0 ** (existing_spur.power_dbm / 10.0)) + (10.0 ** (spur.power_dbm / 10.0))
-                existing_spur.power_dbm = 10.0 * math.log10(max(spur_mw, _MIN_POWER_MW))
-                found = True
-                break
-        if not found:
-            out.spurs.append(spur)
+        _add_tone(spur.frequency, spur.power_dbm)
+
+    combined_tones = sorted(
+        [(f_hz, 10.0 * math.log10(max(p_mw, _MIN_POWER_MW))) for f_hz, p_mw in tone_bins],
+        key=lambda x: x[1],
+        reverse=True,
+    )
+    carrier_f, carrier_p = combined_tones[0]
+    out = Signal(carrier_frequency=carrier_f, power_dbm=carrier_p, spurs=[])
+    for f_hz, p_dbm in combined_tones[1:]:
+        out.add_spur(f_hz, p_dbm)
 
     existing_nf = existing.get_noise_floor_dbm()
     incoming_nf = incoming.get_noise_floor_dbm()

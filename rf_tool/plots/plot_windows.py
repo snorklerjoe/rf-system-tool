@@ -83,12 +83,26 @@ class SpectrumPlot(QWidget):
         self.resize(900, 500)
         layout = QVBoxLayout(self)
 
-        # Toolbar row: zoom-to-fit button
+        # Toolbar row: zoom-to-fit and frequency range controls
         btn_row = QHBoxLayout()
         zoom_btn = QPushButton("⛶ Zoom to Fit")
         zoom_btn.setToolTip("Auto-scale axes to fit all data")
         zoom_btn.clicked.connect(self._zoom_to_fit)
         btn_row.addWidget(zoom_btn)
+        btn_row.addWidget(QLabel("Start (Hz):"))
+        self._start_freq = QDoubleSpinBox()
+        self._start_freq.setDecimals(3)
+        self._start_freq.setRange(-1e15, 1e15)
+        self._start_freq.setSingleStep(1e6)
+        self._start_freq.editingFinished.connect(self._apply_manual_range)
+        btn_row.addWidget(self._start_freq)
+        btn_row.addWidget(QLabel("Stop (Hz):"))
+        self._stop_freq = QDoubleSpinBox()
+        self._stop_freq.setDecimals(3)
+        self._stop_freq.setRange(-1e15, 1e15)
+        self._stop_freq.setSingleStep(1e6)
+        self._stop_freq.editingFinished.connect(self._apply_manual_range)
+        btn_row.addWidget(self._stop_freq)
         btn_row.addStretch()
         layout.addLayout(btn_row)
 
@@ -105,9 +119,20 @@ class SpectrumPlot(QWidget):
 
         self._current_signal = None
         self._y_min = None
+        self._full_x_range: Optional[Tuple[float, float]] = None
 
     def _zoom_to_fit(self) -> None:
-        self._plot_widget.autoRange()
+        if self._full_x_range is None:
+            self._plot_widget.autoRange()
+            return
+        x_min, x_max = self._full_x_range
+        self._start_freq.setValue(x_min)
+        self._stop_freq.setValue(x_max)
+        self.set_signal(self._current_signal)
+
+    def _apply_manual_range(self) -> None:
+        if self._current_signal is not None:
+            self.set_signal(self._current_signal)
 
     def set_signal(self, signal) -> None:
         """
@@ -125,10 +150,32 @@ class SpectrumPlot(QWidget):
 
         all_freqs = [fc] + [s.frequency for s in signal.spurs]
         all_powers = [pw] + [s.power_dbm for s in signal.spurs]
+        self._full_x_range = (min(all_freqs), max(all_freqs))
         noise_floor = signal.get_noise_floor_dbm()
 
-        max_power = max(all_powers)
-        min_power = min(all_powers)
+        start_hz = self._start_freq.value()
+        stop_hz = self._stop_freq.value()
+        if stop_hz <= start_hz and self._full_x_range is not None:
+            start_hz, stop_hz = self._full_x_range
+            self._start_freq.setValue(start_hz)
+            self._stop_freq.setValue(stop_hz)
+
+        in_range_components: List[Tuple[float, float, str]] = []
+        if start_hz <= fc <= stop_hz:
+            in_range_components.append((fc, pw, "Carrier"))
+        for i, spur in enumerate(signal.spurs):
+            if start_hz <= spur.frequency <= stop_hz:
+                in_range_components.append((spur.frequency, spur.power_dbm, f"Spur {i+1}"))
+
+        if not in_range_components:
+            self._plot_widget.setTitle("Spectrum — No tones in selected frequency range")
+            self._info_label.setText("No tones in selected start/stop range.")
+            return
+
+        filtered_powers = [p for _, p, _ in in_range_components]
+        filtered_freqs = [f for f, _, _ in in_range_components]
+        max_power = max(filtered_powers)
+        min_power = min(filtered_powers)
 
         # Noise floor must always be the bottom of the display
         if noise_floor is not None:
@@ -139,24 +186,28 @@ class SpectrumPlot(QWidget):
         self._y_min = y_min
 
         # X range
-        x_min_freq = min(all_freqs)
-        x_max_freq = max(all_freqs)
+        x_min_freq = min(filtered_freqs)
+        x_max_freq = max(filtered_freqs)
         x_span = max(x_max_freq - x_min_freq, 1e6)
-        x_draw_min = x_min_freq - x_span * 0.5
-        x_draw_max = x_max_freq + x_span * 0.5
+        x_draw_min = max(start_hz, x_min_freq - x_span * 0.5)
+        x_draw_max = min(stop_hz, x_max_freq + x_span * 0.5)
+        x_draw_span = max(x_draw_max - x_draw_min, 1e6)
 
         # Draw noise floor trace spanning the full x range
         if noise_floor is not None:
             _draw_noise_floor(self._plot_widget, noise_floor, x_draw_min, x_draw_max)
 
         # Draw carrier impulse
-        self._draw_impulse(fc, pw, color=(0, 200, 255), name="Carrier",
-                           tooltip=f"{fc/1e9:.4f} GHz")
+        if start_hz <= fc <= stop_hz:
+            self._draw_impulse(fc, pw, color=(0, 200, 255), name="Carrier",
+                               tooltip=f"{fc/1e9:.4f} GHz", x_span=x_draw_span)
 
         # Draw spurs
         for i, spur in enumerate(signal.spurs):
-            self._draw_impulse(spur.frequency, spur.power_dbm, color=(255, 100, 0),
-                               name=f"Spur {i+1}", tooltip=f"{spur.frequency/1e9:.4f} GHz")
+            if start_hz <= spur.frequency <= stop_hz:
+                self._draw_impulse(spur.frequency, spur.power_dbm, color=(255, 100, 0),
+                                   name=f"Spur {i+1}", tooltip=f"{spur.frequency/1e9:.4f} GHz",
+                                   x_span=x_draw_span)
 
         # Explicitly set y range so noise floor is always at the bottom
         self._plot_widget.setYRange(y_min, y_max, padding=0)
@@ -175,8 +226,8 @@ class SpectrumPlot(QWidget):
         )
 
     def _draw_impulse(self, freq: float, power_dbm: float, color: Tuple, name: str,
-                      tooltip: str = "") -> None:
-        """Draw a vertical impulse line (stem + tick + dot)."""
+                      tooltip: str = "", x_span: float = 1e6) -> None:
+        """Draw an impulse as an inverted-T stem (vertical line + base cap)."""
         bottom = self._y_min if self._y_min is not None else power_dbm - 60
 
         stem = pg.PlotDataItem(
@@ -186,12 +237,12 @@ class SpectrumPlot(QWidget):
         )
         self._plot_widget.addItem(stem)
 
-        tick_width = abs(freq) * 0.008 if freq != 0 else 1e6
-        tick = pg.PlotDataItem(
-            [freq - tick_width, freq + tick_width], [power_dbm, power_dbm],
+        cap_half_width = max(x_span * 0.0025, 1.0)
+        base_cap = pg.PlotDataItem(
+            [freq - cap_half_width, freq + cap_half_width], [bottom, bottom],
             pen=pg.mkPen(color, width=2.5),
         )
-        self._plot_widget.addItem(tick)
+        self._plot_widget.addItem(base_cap)
 
         dot = pg.ScatterPlotItem(
             x=[freq], y=[power_dbm],
@@ -221,7 +272,7 @@ class ActualSpectrumPlot(QWidget):
         self.resize(900, 500)
         layout = QVBoxLayout(self)
 
-        # Top bar: wire/node label + zoom-to-fit button
+        # Top bar: wire/node label + zoom-to-fit + range controls
         info_layout = QHBoxLayout()
         self._wire_label = QLabel("Click on a wire to show its spectrum")
         self._wire_label.setStyleSheet("color: #AABBDD; font-weight: bold;")
@@ -231,6 +282,20 @@ class ActualSpectrumPlot(QWidget):
         zoom_btn.setToolTip("Auto-scale axes to fit all data")
         zoom_btn.clicked.connect(self._zoom_to_fit)
         info_layout.addWidget(zoom_btn)
+        info_layout.addWidget(QLabel("Start (Hz):"))
+        self._start_freq = QDoubleSpinBox()
+        self._start_freq.setDecimals(3)
+        self._start_freq.setRange(-1e15, 1e15)
+        self._start_freq.setSingleStep(1e6)
+        self._start_freq.editingFinished.connect(self._apply_manual_range)
+        info_layout.addWidget(self._start_freq)
+        info_layout.addWidget(QLabel("Stop (Hz):"))
+        self._stop_freq = QDoubleSpinBox()
+        self._stop_freq.setDecimals(3)
+        self._stop_freq.setRange(-1e15, 1e15)
+        self._stop_freq.setSingleStep(1e6)
+        self._stop_freq.editingFinished.connect(self._apply_manual_range)
+        info_layout.addWidget(self._stop_freq)
         layout.addLayout(info_layout)
 
         # Plot widget
@@ -249,10 +314,21 @@ class ActualSpectrumPlot(QWidget):
 
         self._current_signal = None
         self._current_wire_info = None
+        self._all_signals_with_labels: List[Tuple[str, Any]] = []
+        self._full_x_range: Optional[Tuple[float, float]] = None
         self._y_min = None
 
     def _zoom_to_fit(self) -> None:
-        self._plot_widget.autoRange()
+        if self._full_x_range is None:
+            self._plot_widget.autoRange()
+            return
+        x_min, x_max = self._full_x_range
+        self._start_freq.setValue(x_min)
+        self._stop_freq.setValue(x_max)
+        self._render_multi_signals()
+
+    def _apply_manual_range(self) -> None:
+        self._render_multi_signals()
 
     def set_signal_from_wire(self, signal, src_block_label: str = "",
                              dst_block_label: str = "", port_name: str = "") -> None:
@@ -282,6 +358,10 @@ class ActualSpectrumPlot(QWidget):
         self,
         signals_with_labels: List[Tuple[str, Any]],
     ) -> None:
+        self._all_signals_with_labels = list(signals_with_labels)
+        self._render_multi_signals()
+
+    def _render_multi_signals(self) -> None:
         """
         Overlay multiple signals on the same plot with distinct colours.
 
@@ -294,23 +374,49 @@ class ActualSpectrumPlot(QWidget):
         # Re-attach legend after clear (clear() removes it)
         self._legend = self._plot_widget.addLegend(offset=(10, 10))
 
-        valid = [(lbl, sig) for lbl, sig in signals_with_labels if sig is not None]
+        valid = [(lbl, sig) for lbl, sig in self._all_signals_with_labels if sig is not None]
         if not valid:
             self._info_label.setText("")
+            self._full_x_range = None
             return
 
-        # ---- Determine axis ranges across all signals ----
-        all_powers: List[float] = []
-        all_noise_floors: List[float] = []
+        # ---- Compute full frequency extent ----
         all_freqs: List[float] = []
         for _lbl, sig in valid:
-            all_powers.append(sig.power_dbm)
-            all_powers.extend(s.power_dbm for s in sig.spurs)
+            all_freqs.append(sig.carrier_frequency)
+            all_freqs.extend(s.frequency for s in sig.spurs)
+        self._full_x_range = (min(all_freqs), max(all_freqs))
+
+        start_hz = self._start_freq.value()
+        stop_hz = self._stop_freq.value()
+        if stop_hz <= start_hz and self._full_x_range is not None:
+            start_hz, stop_hz = self._full_x_range
+            self._start_freq.setValue(start_hz)
+            self._stop_freq.setValue(stop_hz)
+
+        # ---- Determine axis ranges across all displayed signals ----
+        all_powers: List[float] = []
+        all_noise_floors: List[float] = []
+        displayed_components: List[Tuple[str, Any, List[Tuple[float, float, bool]]]] = []
+        for _lbl, sig in valid:
+            comps: List[Tuple[float, float, bool]] = []
+            if start_hz <= sig.carrier_frequency <= stop_hz:
+                comps.append((sig.carrier_frequency, sig.power_dbm, True))
+            for spur in sig.spurs:
+                if start_hz <= spur.frequency <= stop_hz:
+                    comps.append((spur.frequency, spur.power_dbm, False))
+            if not comps:
+                continue
+            displayed_components.append((_lbl, sig, comps))
+            all_powers.extend(power_dbm for _, power_dbm, _ in comps)
             nf = sig.get_noise_floor_dbm()
             if nf is not None:
                 all_noise_floors.append(nf)
-            all_freqs.append(sig.carrier_frequency)
-            all_freqs.extend(s.frequency for s in sig.spurs)
+
+        if not displayed_components:
+            self._plot_widget.setTitle("Signal Spectrum — No tones in selected frequency range")
+            self._info_label.setText("No tones in selected start/stop range.")
+            return
 
         max_power = max(all_powers)
         min_power = min(all_powers)
@@ -325,11 +431,13 @@ class ActualSpectrumPlot(QWidget):
         self._y_min = y_min
 
         # ---- Determine x range ----
-        x_min_freq = min(all_freqs)
-        x_max_freq = max(all_freqs)
+        visible_freqs = [freq for _, _, comps in displayed_components for freq, _, _ in comps]
+        x_min_freq = min(visible_freqs)
+        x_max_freq = max(visible_freqs)
         x_span = max(x_max_freq - x_min_freq, 1e6)
-        x_draw_min = x_min_freq - x_span * 0.5
-        x_draw_max = x_max_freq + x_span * 0.5
+        x_draw_min = max(start_hz, x_min_freq - x_span * 0.5)
+        x_draw_max = min(stop_hz, x_max_freq + x_span * 0.5)
+        x_draw_span = max(x_draw_max - x_draw_min, 1e6)
 
         # ---- Noise floor trace (drawn first, behind signals) ----
         if noise_floor is not None:
@@ -337,28 +445,26 @@ class ActualSpectrumPlot(QWidget):
 
         # ---- Draw each signal with its own colour ----
         info_parts: List[str] = []
-        for i, (label, sig) in enumerate(valid):
+        for i, (label, sig, comps) in enumerate(displayed_components):
             color = _SIGNAL_COLORS[i % len(_SIGNAL_COLORS)]
-            fc = sig.carrier_frequency
-            pw = sig.power_dbm
             sig_nf = sig.get_noise_floor_dbm()
 
-            # Carrier: stem gets the legend name
-            self._draw_impulse(fc, pw, color=color,
-                               name=label,
-                               is_carrier=True,
-                               tooltip=f"{fc/1e9:.4f} GHz")
-            # Spurs: slightly darker shade
             spur_color = tuple(max(0, int(c * 0.65)) for c in color)
-            for j, spur in enumerate(sig.spurs):
-                self._draw_impulse(spur.frequency, spur.power_dbm,
-                                   color=spur_color,
-                                   name=f"{label} spur {j+1}",
-                                   is_carrier=False,
-                                   tooltip=f"{spur.frequency/1e9:.4f} GHz",
-                                   legend_name=None)
+            for j, (freq_hz, power_dbm, is_carrier) in enumerate(comps):
+                tone_color = color if is_carrier else spur_color
+                self._draw_impulse(
+                    freq_hz,
+                    power_dbm,
+                    color=tone_color,
+                    name=label if is_carrier else f"{label} spur {j+1}",
+                    is_carrier=is_carrier,
+                    tooltip=f"{freq_hz/1e9:.4f} GHz",
+                    legend_name=label if is_carrier else None,
+                    x_span=x_draw_span,
+                )
 
-            part = f"{label}: {fc/1e9:.4f} GHz @ {pw:.1f} dBm"
+            strongest = max(comps, key=lambda x: x[1])
+            part = f"{label}: {strongest[0]/1e9:.4f} GHz @ {strongest[1]:.1f} dBm"
             if sig_nf is not None:
                 part += f" | NF floor {sig_nf:.1f} dBm"
             if sig.snr_db is not None:
@@ -371,14 +477,14 @@ class ActualSpectrumPlot(QWidget):
         self._plot_widget.setYRange(y_min, y_max, padding=0)
         self._plot_widget.setXRange(x_draw_min, x_draw_max, padding=0.02)
 
-        if len(valid) == 1:
-            lbl, sig = valid[0]
+        if len(displayed_components) == 1:
+            lbl, _sig, _comps = displayed_components[0]
             self._wire_label.setText(lbl)
             self._plot_widget.setTitle(f"Spectrum — {lbl}")
 
     def _draw_impulse(self, freq: float, power_dbm: float, color: Tuple, name: str,
                       is_carrier: bool = False, tooltip: str = "",
-                      legend_name: Optional[str] = ...) -> None:
+                      legend_name: Optional[str] = ..., x_span: float = 1e6) -> None:
         """
         Draw a vertical impulse line with enhanced styling.
 
@@ -405,12 +511,12 @@ class ActualSpectrumPlot(QWidget):
         )
         self._plot_widget.addItem(stem)
 
-        tick_width = abs(freq) * 0.008 if freq != 0 else 1e6
-        tick = pg.PlotDataItem(
-            [freq - tick_width, freq + tick_width], [power_dbm, power_dbm],
+        cap_half_width = max(x_span * 0.0025, 1.0)
+        base_cap = pg.PlotDataItem(
+            [freq - cap_half_width, freq + cap_half_width], [bottom, bottom],
             pen=pg.mkPen(color, width=line_width),
         )
-        self._plot_widget.addItem(tick)
+        self._plot_widget.addItem(base_cap)
 
         dot_size = 8 if is_carrier else 6
         dot = pg.ScatterPlotItem(
