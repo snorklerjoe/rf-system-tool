@@ -547,9 +547,13 @@ class RFScene(QGraphicsScene):
                     continue
                 per_wire[c_key] = sig.copy()
 
-                merged_in: Optional[RFSignal] = None
-                for wire_sig in per_wire.values():
-                    merged_in = wire_sig.copy() if merged_in is None else self._merge_signals(merged_in, wire_sig)
+                merged_iter = iter(per_wire.values())
+                first_wire_sig = next(merged_iter, None)
+                if first_wire_sig is None:
+                    continue
+                merged_in: Optional[RFSignal] = first_wire_sig.copy()
+                for wire_sig in merged_iter:
+                    merged_in = self._merge_signals(merged_in, wire_sig)
                 if merged_in is None:
                     continue
                 signals_at.setdefault(dst_bid, {})[dst_port] = merged_in

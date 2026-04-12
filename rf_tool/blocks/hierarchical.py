@@ -491,9 +491,13 @@ class HierSubcircuit(RFBlock):
                     continue
                 per_wire[c_key] = sig.copy()
 
-                merged_in: Optional[Signal] = None
-                for wire_sig in per_wire.values():
-                    merged_in = wire_sig.copy() if merged_in is None else _merge_signals(merged_in, wire_sig)
+                merged_iter = iter(per_wire.values())
+                first_wire_sig = next(merged_iter, None)
+                if first_wire_sig is None:
+                    continue
+                merged_in: Optional[Signal] = first_wire_sig.copy()
+                for wire_sig in merged_iter:
+                    merged_in = _merge_signals(merged_in, wire_sig)
                 if merged_in is None:
                     continue
                 signals_at.setdefault(dst_bid, {})[dst_port] = merged_in
