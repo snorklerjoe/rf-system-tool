@@ -436,8 +436,8 @@ class RFScene(QGraphicsScene):
             elif incoming.snr_db is None:
                 out.snr_db = existing.snr_db
             else:
-                existing_mw = 10.0 ** (existing.power_dbm / 10.0)
-                incoming_mw = 10.0 ** (incoming.power_dbm / 10.0)
+                existing_mw = 10.0 ** (existing.total_power_dbm() / 10.0)
+                incoming_mw = 10.0 ** (incoming.total_power_dbm() / 10.0)
                 noise_existing = existing_mw / (10.0 ** (existing.snr_db / 10.0))
                 noise_incoming = incoming_mw / (10.0 ** (incoming.snr_db / 10.0))
                 total_noise = noise_existing + noise_incoming
@@ -516,13 +516,13 @@ class RFScene(QGraphicsScene):
                 if dst_item is None:
                     continue
                 c_key = (src_bid, src_port, dst_bid, dst_port)
-                wire_power[c_key] = sig.power_dbm
+                wire_power[c_key] = sig.total_power_dbm()
                 merged_in = self._merge_signals(signals_at.setdefault(dst_bid, {}).get(dst_port), sig)
                 prev_in = signals_at.setdefault(dst_bid, {}).get(dst_port)
                 signals_at.setdefault(dst_bid, {})[dst_port] = merged_in
 
                 # Power warning
-                status = dst_item.block.check_power(merged_in.power_dbm)
+                status = dst_item.block.check_power(merged_in.total_power_dbm())
                 dst_item.set_power_warning(status)
 
                 if self._signals_equivalent(prev_in, merged_in):
@@ -538,7 +538,7 @@ class RFScene(QGraphicsScene):
                     for out_sig in result.values():
                         in_noise_floor = merged_in.get_noise_floor_dbm()
                         if in_noise_floor is not None:
-                            effective_gain = out_sig.power_dbm - merged_in.power_dbm
+                            effective_gain = out_sig.total_power_dbm() - merged_in.total_power_dbm()
                             out_noise_floor = in_noise_floor + effective_gain + max(0.0, dst_item.block.nf_db)
                             out_sig.set_noise_floor_dbm(out_noise_floor)
                         elif merged_in.snr_db is not None and out_sig.snr_db is None:

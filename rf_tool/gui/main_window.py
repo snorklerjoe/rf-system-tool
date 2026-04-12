@@ -671,16 +671,17 @@ class MainWindow(QMainWindow):
             if item is None:
                 continue
             block = item.block
-            # Get first output port signal
-            out_ports = block.output_ports
-            signal = None
-            for port in out_ports:
-                sig = signals_at.get(bid, {}).get(port.name)
-                if sig is not None:
-                    signal = sig
-                    break
-            label = f"{block.BLOCK_TYPE}: {block.label}"
-            signals_with_labels.append((label, signal))
+            port_signals = signals_at.get(bid, {})
+            added_any = False
+            for port_name, signal in port_signals.items():
+                if signal is None:
+                    continue
+                label = f"{block.BLOCK_TYPE}: {block.label} [{port_name}]"
+                signals_with_labels.append((label, signal))
+                added_any = True
+            if not added_any:
+                label = f"{block.BLOCK_TYPE}: {block.label}"
+                signals_with_labels.append((label, None))
 
         if not any(sig for _, sig in signals_with_labels):
             return

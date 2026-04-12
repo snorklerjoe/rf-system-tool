@@ -324,6 +324,16 @@ class TestSparBlock:
         gain = b.get_gain_db_at(5e9)
         assert gain == pytest.approx(20 * math.log10(0.5), abs=1e-4)
 
+    def test_process_applies_frequency_dependent_gain_to_spurs(self):
+        b = SparBlock()
+        b.get_gain_db_at = lambda f_hz: 10.0 if f_hz < 1.5e9 else -10.0
+        sig = make_signal(fc=1e9, pwr=0.0, spurs=[SpurTone(2e9, 0.0)])
+        out = b.process(sig)["OUT"]
+        assert out.power_dbm == pytest.approx(10.0)
+        assert len(out.spurs) == 1
+        assert out.spurs[0].frequency == pytest.approx(2e9)
+        assert out.spurs[0].power_dbm == pytest.approx(-10.0)
+
 
 # ======================================================================= #
 # TransferFnBlock                                                          #
@@ -401,6 +411,14 @@ class TestLowPassFilter:
         sig = make_signal(fc=10e9, pwr=0.0)  # well above cutoff
         out = f.process(sig)["OUT"]
         assert out.power_dbm < -30.0  # deep in stopband
+
+    def test_process_applies_lpf_gain_per_tone(self):
+        f = LowPassFilter(order=4, cutoff_hz=1e9)
+        sig = make_signal(fc=100e6, pwr=0.0, spurs=[SpurTone(10e9, 0.0)])
+        out = f.process(sig)["OUT"]
+        high_freq_tone = min([out.power_dbm] + [s.power_dbm for s in out.spurs])
+        assert out.power_dbm > -1.0  # carrier near passband
+        assert high_freq_tone < -60.0  # high-frequency spur is strongly attenuated
 
     def test_round_trip(self):
         f = LowPassFilter(order=5, cutoff_hz=2.4e9)

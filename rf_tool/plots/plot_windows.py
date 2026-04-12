@@ -150,9 +150,14 @@ class SpectrumPlot(QWidget):
 
         start_hz = self._start_freq.value() * 1e9
         stop_hz = self._stop_freq.value() * 1e9
-        if stop_hz <= start_hz and self._full_x_range is not None:
-            start_hz, stop_hz = self._full_x_range
-            self._set_range_controls_ghz(start_hz, stop_hz)
+        if stop_hz <= start_hz:
+            if self._full_x_range is not None and self._start_freq.value() == 0.0 and self._stop_freq.value() == 0.0:
+                start_hz, stop_hz = self._full_x_range
+                self._set_range_controls_ghz(start_hz, stop_hz)
+            else:
+                self._plot_widget.setTitle("Spectrum — Invalid frequency range")
+                self._info_label.setText("Set Stop frequency greater than Start frequency.")
+                return
 
         in_range_components: List[Tuple[float, float, str]] = []
         if start_hz <= fc <= stop_hz:
@@ -164,6 +169,9 @@ class SpectrumPlot(QWidget):
         if not in_range_components:
             self._plot_widget.setTitle("Spectrum — No tones in selected frequency range")
             self._info_label.setText("No tones in selected start/stop range.")
+            if noise_floor is not None:
+                _draw_noise_floor(self._plot_widget, noise_floor, start_hz, stop_hz)
+            self._plot_widget.setXRange(start_hz, stop_hz, padding=0.0)
             return
 
         filtered_powers = [p for _, p, _ in in_range_components]
@@ -179,12 +187,8 @@ class SpectrumPlot(QWidget):
         y_max = max_power + max(10.0, abs(max_power - y_min) * 0.1)
         self._y_min = y_min
 
-        # X range
-        x_min_freq = min(filtered_freqs)
-        x_max_freq = max(filtered_freqs)
-        x_span = max(x_max_freq - x_min_freq, 1e6)
-        x_draw_min = max(start_hz, x_min_freq - x_span * 0.5)
-        x_draw_max = min(stop_hz, x_max_freq + x_span * 0.5)
+        x_draw_min = start_hz
+        x_draw_max = stop_hz
         x_draw_span = max(x_draw_max - x_draw_min, 1e6)
 
         # Draw noise floor trace spanning the full x range
@@ -205,7 +209,7 @@ class SpectrumPlot(QWidget):
 
         # Explicitly set y range so noise floor is always at the bottom
         self._plot_widget.setYRange(y_min, y_max, padding=0)
-        self._plot_widget.setXRange(x_draw_min, x_draw_max, padding=0.02)
+        self._plot_widget.setXRange(x_draw_min, x_draw_max, padding=0.0)
 
         self._plot_widget.setTitle(
             f"Spectrum — Carrier: {fc/1e9:.4f} GHz @ {pw:.1f} dBm, Spurs: {len(signal.spurs)}"
@@ -378,9 +382,14 @@ class ActualSpectrumPlot(QWidget):
 
         start_hz = self._start_freq.value() * 1e9
         stop_hz = self._stop_freq.value() * 1e9
-        if stop_hz <= start_hz and self._full_x_range is not None:
-            start_hz, stop_hz = self._full_x_range
-            self._set_range_controls_ghz(start_hz, stop_hz)
+        if stop_hz <= start_hz:
+            if self._full_x_range is not None and self._start_freq.value() == 0.0 and self._stop_freq.value() == 0.0:
+                start_hz, stop_hz = self._full_x_range
+                self._set_range_controls_ghz(start_hz, stop_hz)
+            else:
+                self._plot_widget.setTitle("Signal Spectrum — Invalid frequency range")
+                self._info_label.setText("Set Stop frequency greater than Start frequency.")
+                return
 
         # ---- Determine axis ranges across all displayed signals ----
         all_powers: List[float] = []
@@ -404,6 +413,10 @@ class ActualSpectrumPlot(QWidget):
         if not displayed_components:
             self._plot_widget.setTitle("Signal Spectrum — No tones in selected frequency range")
             self._info_label.setText("No tones in selected start/stop range.")
+            min_nf = min(all_noise_floors) if all_noise_floors else None
+            if min_nf is not None:
+                _draw_noise_floor(self._plot_widget, min_nf, start_hz, stop_hz)
+            self._plot_widget.setXRange(start_hz, stop_hz, padding=0.0)
             return
 
         max_power = max(all_powers)
@@ -418,13 +431,8 @@ class ActualSpectrumPlot(QWidget):
         y_max = max_power + max(10.0, abs(max_power - y_min) * 0.1)
         self._y_min = y_min
 
-        # ---- Determine x range ----
-        visible_freqs = [freq for _, _, comps in displayed_components for freq, _, _ in comps]
-        x_min_freq = min(visible_freqs)
-        x_max_freq = max(visible_freqs)
-        x_span = max(x_max_freq - x_min_freq, 1e6)
-        x_draw_min = max(start_hz, x_min_freq - x_span * 0.5)
-        x_draw_max = min(stop_hz, x_max_freq + x_span * 0.5)
+        x_draw_min = start_hz
+        x_draw_max = stop_hz
         x_draw_span = max(x_draw_max - x_draw_min, 1e6)
 
         # ---- Noise floor trace (drawn first, behind signals) ----
@@ -436,10 +444,12 @@ class ActualSpectrumPlot(QWidget):
         for i, (label, sig, comps) in enumerate(displayed_components):
             color = _SIGNAL_COLORS[i % len(_SIGNAL_COLORS)]
             sig_nf = sig.get_noise_floor_dbm()
+            legend_added = False
 
             spur_color = tuple(max(0, int(c * 0.65)) for c in color)
             for j, (freq_hz, power_dbm, is_carrier) in enumerate(comps):
                 tone_color = color if is_carrier else spur_color
+                legend_name = label if not legend_added else None
                 self._draw_impulse(
                     freq_hz,
                     power_dbm,
@@ -447,9 +457,10 @@ class ActualSpectrumPlot(QWidget):
                     name=label if is_carrier else f"{label} spur {j+1}",
                     is_carrier=is_carrier,
                     tooltip=f"{freq_hz/1e9:.4f} GHz",
-                    legend_name=label if is_carrier else None,
+                    legend_name=legend_name,
                     x_span=x_draw_span,
                 )
+                legend_added = True
 
             strongest = max(comps, key=lambda x: x[1])
             part = f"{label}: {strongest[0]/1e9:.4f} GHz @ {strongest[1]:.1f} dBm"
@@ -463,7 +474,7 @@ class ActualSpectrumPlot(QWidget):
 
         # ---- Set axis ranges explicitly ----
         self._plot_widget.setYRange(y_min, y_max, padding=0)
-        self._plot_widget.setXRange(x_draw_min, x_draw_max, padding=0.02)
+        self._plot_widget.setXRange(x_draw_min, x_draw_max, padding=0.0)
 
         if len(displayed_components) == 1:
             lbl, _sig, _comps = displayed_components[0]

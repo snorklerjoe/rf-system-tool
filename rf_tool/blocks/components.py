@@ -314,8 +314,7 @@ class SparBlock(RFBlock):
 
     def process(self, signal: Signal, port_name: str = "IN") -> Dict[str, Signal]:
         """Apply S21 at the signal's carrier frequency (interpolated)."""
-        gain = self.get_gain_db_at(signal.carrier_frequency)
-        out = signal.apply_gain(gain)
+        out = signal.apply_frequency_response(self.get_gain_db_at)
         # Do NOT generate spurs (S-params = linear block)
         return {"OUT": out}
 
@@ -391,8 +390,7 @@ class TransferFnBlock(RFBlock):
         return float(mag[0])
 
     def process(self, signal: Signal, port_name: str = "IN") -> Dict[str, Signal]:
-        gain = self.gain_db_at_freq(signal.carrier_frequency)
-        out = signal.apply_gain(gain)
+        out = signal.apply_frequency_response(self.gain_db_at_freq)
         return {"OUT": out}
 
     def to_dict(self) -> dict:
@@ -461,8 +459,7 @@ class LowPassFilter(RFBlock):
         return 20.0 * math.log10(mag) if mag > 0 else -300.0
 
     def process(self, signal: Signal, port_name: str = "IN") -> Dict[str, Signal]:
-        gain = self.gain_db_at_freq(signal.carrier_frequency)
-        out = signal.apply_gain(gain)
+        out = signal.apply_frequency_response(self.gain_db_at_freq)
         return {"OUT": out}
 
     def to_dict(self) -> dict:
@@ -515,8 +512,7 @@ class HighPassFilter(RFBlock):
         return 20.0 * math.log10(mag) if mag > 0 else -300.0
 
     def process(self, signal: Signal, port_name: str = "IN") -> Dict[str, Signal]:
-        gain = self.gain_db_at_freq(signal.carrier_frequency)
-        out = signal.apply_gain(gain)
+        out = signal.apply_frequency_response(self.gain_db_at_freq)
         return {"OUT": out}
 
     def to_dict(self) -> dict:

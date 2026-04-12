@@ -167,6 +167,25 @@ class TestApplyGain:
         assert out.power_dbm == pytest.approx(-8.0)
 
 
+class TestFrequencyDependentGain:
+    def test_total_power_is_superposition_of_components(self):
+        sig = Signal(1e9, 0.0, spurs=[SpurTone(2e9, 0.0)])
+        assert sig.total_power_dbm() == pytest.approx(3.0103, abs=1e-3)
+
+    def test_apply_frequency_response_scales_tones_independently(self):
+        sig = Signal(1e9, 0.0, spurs=[SpurTone(2e9, -10.0)])
+
+        def gain_fn(freq_hz: float) -> float:
+            return 20.0 if freq_hz < 1.5e9 else -20.0
+
+        out = sig.apply_frequency_response(gain_fn)
+        assert out.carrier_frequency == pytest.approx(1e9)
+        assert out.power_dbm == pytest.approx(20.0)
+        assert len(out.spurs) == 1
+        assert out.spurs[0].frequency == pytest.approx(2e9)
+        assert out.spurs[0].power_dbm == pytest.approx(-30.0)
+
+
 # ======================================================================= #
 # Signal.add_spur                                                          #
 # ======================================================================= #
