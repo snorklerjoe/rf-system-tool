@@ -17,6 +17,8 @@ import numpy as np
 from rf_tool.models.rf_block import RFBlock, Port
 from rf_tool.models.signal import Signal, SpurTone
 
+_FREQUENCY_TOLERANCE_HZ = 1e-3
+
 
 # ======================================================================= #
 # Amplifier / Gain Block                                                   #
@@ -604,7 +606,7 @@ class PowerSplitter(RFBlock):
             def _accumulate_tone(freq_hz: float, power_dbm: float) -> None:
                 power_mw = 10.0 ** (power_dbm / 10.0)
                 for idx, (f_hz, p_mw) in enumerate(tone_bins):
-                    if abs(f_hz - freq_hz) < 1e-3:
+                    if abs(f_hz - freq_hz) < _FREQUENCY_TOLERANCE_HZ:
                         constructive_freqs.add(f_hz)
                         tone_bins[idx] = (f_hz, p_mw + power_mw)
                         return
@@ -636,7 +638,7 @@ class PowerSplitter(RFBlock):
 
             combined_tones = sorted(
                 [(f_hz, 10.0 * math.log10(max(p_mw, 1e-300))) for f_hz, p_mw in tone_bins],
-                key=lambda tone: tone[1],
+                key=lambda freq_power: freq_power[1],
                 reverse=True,
             )
             carrier_f, carrier_p = combined_tones[0]

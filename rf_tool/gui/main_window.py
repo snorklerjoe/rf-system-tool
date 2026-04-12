@@ -117,7 +117,7 @@ class MainWindow(QMainWindow):
         self._messages_console = QTextEdit()
         self._messages_console.setReadOnly(True)
         self._messages_console.setStyleSheet(
-            "QTextEdit { background: #11151f; color: #D0D0D0; font-family: Consolas, Menlo, monospace; }"
+            "QTextEdit { background: #0F1218; color: #F2F2F2; font-family: Consolas, Menlo, monospace; }"
         )
         dock.setWidget(self._messages_console)
         self.addDockWidget(Qt.BottomDockWidgetArea, dock)
