@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import logging
 from collections import deque
 from typing import Dict, List, Optional, Any, Tuple, Set
 
@@ -20,6 +21,7 @@ from rf_tool.models.signal import Signal
 _MIN_POWER_MW = 1e-30
 _MIN_PROPAGATION_ITERATIONS = 50
 _ITERATIONS_PER_CONNECTION = 8
+logger = logging.getLogger(__name__)
 
 
 # ======================================================================= #
@@ -271,7 +273,7 @@ def analysis_blocks_from_subcircuit(
         return []
 
     resolved_path = os.path.abspath(subcircuit_path)
-    active_paths = _active_paths or []
+    active_paths = _active_paths if _active_paths is not None else []
     if resolved_path in active_paths:
         return []
 
@@ -324,7 +326,7 @@ def analysis_blocks_from_subcircuit(
             for dst_id in adjacency.get(src_id, set()):
                 if dst_id in path_ids:
                     indegree[dst_id] += 1
-        queue = deque(sorted((bid for bid, deg in indegree.items() if deg == 0), key=lambda bid: block_order.get(bid, 0)))
+        queue = deque(sorted((bid for bid, deg in indegree.items() if deg == 0), key=lambda bid: block_order[bid]))
         ordered_ids: List[str] = []
         seen: Set[str] = set()
         while queue:
@@ -333,7 +335,7 @@ def analysis_blocks_from_subcircuit(
                 continue
             seen.add(bid)
             ordered_ids.append(bid)
-            for dst_id in sorted(adjacency.get(bid, set()), key=lambda x: block_order.get(x, 0)):
+            for dst_id in sorted(adjacency.get(bid, set()), key=lambda x: block_order[x]):
                 if dst_id not in indegree:
                     continue
                 indegree[dst_id] -= 1
@@ -341,7 +343,7 @@ def analysis_blocks_from_subcircuit(
                     queue.append(dst_id)
 
         if len(ordered_ids) < len(path_ids):
-            remaining = sorted(path_ids - set(ordered_ids), key=lambda bid: block_order.get(bid, 0))
+            remaining = sorted(path_ids - set(ordered_ids), key=lambda bid: block_order[bid])
             ordered_ids.extend(remaining)
 
         expanded: List[RFBlock] = []
@@ -352,7 +354,8 @@ def analysis_blocks_from_subcircuit(
             else:
                 expanded.append(block)
         return expanded
-    except Exception:
+    except (OSError, json.JSONDecodeError, ValueError, KeyError, TypeError) as exc:
+        logger.warning("analysis_blocks_from_subcircuit failed for %s: %s", subcircuit_path, exc)
         return []
     finally:
         active_paths.pop()
