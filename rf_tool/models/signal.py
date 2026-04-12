@@ -127,7 +127,7 @@ class Signal:
 
         in_noise = self.get_noise_floor_dbm()
         if in_noise is not None:
-            carrier_gain = gain_fn(self.carrier_frequency)
+            carrier_gain = gain_fn(carrier_f)
             out.set_noise_floor_dbm(in_noise + carrier_gain)
         else:
             out.snr_db = self.snr_db
