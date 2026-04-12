@@ -18,6 +18,7 @@ Also covers:
   - Source.generate()
   - Sink.process() captures signal
 """
+import json
 import math
 import pytest
 import numpy as np
@@ -29,6 +30,7 @@ from rf_tool.blocks.components import (
     LowPassFilter, HighPassFilter, PowerSplitter, PowerCombiner, Switch, Source, Sink,
     BLOCK_REGISTRY, block_from_dict,
 )
+from rf_tool.blocks.hierarchical import HierSubcircuit
 
 
 # ======================================================================= #
@@ -782,3 +784,60 @@ class TestSignalChainPropagation:
         # After amp2: carrier=0dBm, spur: -50+10=-40dBm
         assert sig.power_dbm == pytest.approx(0.0)
         assert sig.spurs[0].power_dbm == pytest.approx(-40.0)
+
+
+# ======================================================================= #
+# Hierarchical subcircuit simulation                                       #
+# ======================================================================= #
+
+class TestHierSubcircuitSimulation:
+    def test_uses_internal_chain_not_pass_through(self, tmp_path):
+        sub_path = tmp_path / "sub_amp.json"
+        scene = {
+            "version": "1",
+            "metadata": {},
+            "blocks": [
+                {"block_type": "HierInputPin", "block_id": "in1", "pin_name": "IN", "label": "IN"},
+                {"block_type": "Amplifier", "block_id": "amp1", "gain_db": 12.0, "nf_db": 2.0},
+                {"block_type": "HierOutputPin", "block_id": "out1", "pin_name": "OUT", "label": "OUT"},
+            ],
+            "connections": [
+                {"src_block_id": "in1", "src_port": "IN", "dst_block_id": "amp1", "dst_port": "IN"},
+                {"src_block_id": "amp1", "src_port": "OUT", "dst_block_id": "out1", "dst_port": "OUT"},
+            ],
+            "annotations": [],
+        }
+        sub_path.write_text(json.dumps(scene), encoding="utf-8")
+
+        block = HierSubcircuit(subcircuit_path=str(sub_path))
+        out = block.process(make_signal(fc=2e9, pwr=-25.0), "IN")
+        assert "OUT" in out
+        assert out["OUT"].power_dbm == pytest.approx(-13.0, abs=1e-6)
+
+    def test_multi_input_internal_mixer_requires_both_inputs(self, tmp_path):
+        sub_path = tmp_path / "sub_mixer.json"
+        scene = {
+            "version": "1",
+            "metadata": {},
+            "blocks": [
+                {"block_type": "HierInputPin", "block_id": "in_rf", "pin_name": "RF", "label": "RF"},
+                {"block_type": "HierInputPin", "block_id": "in_lo", "pin_name": "LO", "label": "LO"},
+                {"block_type": "Mixer", "block_id": "mix1", "conversion_expressions": ["RF-LO"], "gain_db": -7.0},
+                {"block_type": "HierOutputPin", "block_id": "out_if", "pin_name": "IF", "label": "IF"},
+            ],
+            "connections": [
+                {"src_block_id": "in_rf", "src_port": "RF", "dst_block_id": "mix1", "dst_port": "RF"},
+                {"src_block_id": "in_lo", "src_port": "LO", "dst_block_id": "mix1", "dst_port": "LO"},
+                {"src_block_id": "mix1", "src_port": "IF", "dst_block_id": "out_if", "dst_port": "IF"},
+            ],
+            "annotations": [],
+        }
+        sub_path.write_text(json.dumps(scene), encoding="utf-8")
+
+        block = HierSubcircuit(subcircuit_path=str(sub_path))
+        assert block.process(make_signal(fc=2e9, pwr=-10.0), "RF") == {}
+
+        out = block.process(make_signal(fc=1.9e9, pwr=0.0), "LO")
+        assert "IF" in out
+        assert out["IF"].carrier_frequency == pytest.approx(100e6, rel=1e-9)
+        assert out["IF"].power_dbm == pytest.approx(-17.0, abs=1e-6)

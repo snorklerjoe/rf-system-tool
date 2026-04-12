@@ -9,11 +9,16 @@ HierSubcircuit – reference to an external JSON scene file; ports are loaded
 from __future__ import annotations
 
 import json
+import math
 import os
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 
 from rf_tool.models.rf_block import RFBlock, Port
 from rf_tool.models.signal import Signal
+
+_MIN_POWER_MW = 1e-30
+_MIN_PROPAGATION_ITERATIONS = 50
+_ITERATIONS_PER_CONNECTION = 8
 
 
 # ======================================================================= #
@@ -150,6 +155,79 @@ def _load_pins_from_file(path: str):
         return [], [], True, {}
 
 
+def _signals_equivalent(a: Optional[Signal], b: Optional[Signal]) -> bool:
+    """Compare two Signal instances with practical tolerances."""
+    if a is b:
+        return True
+    if a is None or b is None:
+        return False
+    if (
+        abs(a.carrier_frequency - b.carrier_frequency) > 1e-6
+        or abs(a.power_dbm - b.power_dbm) > 1e-6
+    ):
+        return False
+    if len(a.spurs) != len(b.spurs):
+        return False
+    for sa, sb in zip(a.spurs, b.spurs):
+        if abs(sa.frequency - sb.frequency) > 1e-6 or abs(sa.power_dbm - sb.power_dbm) > 1e-6:
+            return False
+    return True
+
+
+def _merge_signals(existing: Optional[Signal], incoming: Signal) -> Signal:
+    """Power-combine two signals at the same node, including spurs/noise."""
+    if existing is None:
+        return incoming.copy()
+    out = existing.copy()
+    p_total_mw = (10.0 ** (existing.power_dbm / 10.0)) + (10.0 ** (incoming.power_dbm / 10.0))
+    out.power_dbm = 10.0 * math.log10(max(p_total_mw, _MIN_POWER_MW))
+
+    for spur in incoming.spurs:
+        found = False
+        for existing_spur in out.spurs:
+            if abs(existing_spur.frequency - spur.frequency) < 1e-3:
+                spur_mw = (10.0 ** (existing_spur.power_dbm / 10.0)) + (10.0 ** (spur.power_dbm / 10.0))
+                existing_spur.power_dbm = 10.0 * math.log10(max(spur_mw, _MIN_POWER_MW))
+                found = True
+                break
+        if not found:
+            out.spurs.append(spur)
+
+    existing_nf = existing.get_noise_floor_dbm()
+    incoming_nf = incoming.get_noise_floor_dbm()
+    if existing_nf is None and incoming_nf is None:
+        if existing.snr_db is None:
+            out.snr_db = incoming.snr_db
+        elif incoming.snr_db is None:
+            out.snr_db = existing.snr_db
+        else:
+            existing_mw = 10.0 ** (existing.power_dbm / 10.0)
+            incoming_mw = 10.0 ** (incoming.power_dbm / 10.0)
+            noise_existing = existing_mw / (10.0 ** (existing.snr_db / 10.0))
+            noise_incoming = incoming_mw / (10.0 ** (incoming.snr_db / 10.0))
+            total_noise = noise_existing + noise_incoming
+            total_signal = existing_mw + incoming_mw
+            out.snr_db = 10.0 * math.log10(total_signal / max(total_noise, _MIN_POWER_MW))
+        return out
+
+    noise_terms = []
+    if existing_nf is not None:
+        noise_terms.append(10.0 ** (existing_nf / 10.0))
+    if incoming_nf is not None:
+        noise_terms.append(10.0 ** (incoming_nf / 10.0))
+    total_noise_mw = sum(noise_terms)
+    out_noise_floor = 10.0 * math.log10(max(total_noise_mw, _MIN_POWER_MW))
+    out.set_noise_floor_dbm(out_noise_floor)
+    return out
+
+
+def _resolve_subcircuit_path(path: str, base_dir: str) -> str:
+    """Resolve a potentially relative subcircuit file path against base_dir."""
+    if os.path.isabs(path):
+        return path
+    return os.path.normpath(os.path.join(base_dir, path))
+
+
 class HierSubcircuit(RFBlock):
     """
     A hierarchical sub-circuit block that references an external JSON scene file.
@@ -160,6 +238,7 @@ class HierSubcircuit(RFBlock):
     """
 
     BLOCK_TYPE = "HierSubcircuit"
+    _ACTIVE_PATH_STACK: List[str] = []
 
     def __init__(
         self,
@@ -172,6 +251,7 @@ class HierSubcircuit(RFBlock):
         self.file_missing: bool = False
         self._input_pin_names: List[str] = []
         self._output_pin_names: List[str] = []
+        self._external_inputs: Dict[str, Signal] = {}
 
         kwargs.setdefault("label", os.path.splitext(os.path.basename(subcircuit_path))[0] or "Sub")
         kwargs.setdefault("color", "#8E44AD")
@@ -194,11 +274,110 @@ class HierSubcircuit(RFBlock):
         self._setup_ports()
 
     def process(self, signal: Signal, port_name: str = "IN") -> Dict[str, Signal]:
-        # Pass-through: a real hierarchical simulation would recurse
-        result = {}
-        for port in self._output_ports:
-            result[port.name] = signal.copy()
-        return result
+        self._external_inputs[port_name] = signal.copy()
+        if self.file_missing or not self.subcircuit_path:
+            return {}
+
+        resolved_path = os.path.abspath(self.subcircuit_path)
+        if resolved_path in self._ACTIVE_PATH_STACK:
+            # Prevent recursive self-reference loops.
+            return {}
+
+        self._ACTIVE_PATH_STACK.append(resolved_path)
+        try:
+            return self._simulate_subcircuit()
+        except Exception:
+            return {}
+        finally:
+            self._ACTIVE_PATH_STACK.pop()
+
+    def _simulate_subcircuit(self) -> Dict[str, Signal]:
+        """Run event-based propagation inside the referenced subcircuit scene."""
+        from rf_tool.blocks.components import block_from_dict
+
+        with open(self.subcircuit_path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        base_dir = os.path.dirname(os.path.abspath(self.subcircuit_path))
+
+        blocks: Dict[str, RFBlock] = {}
+        input_blocks: Dict[str, HierInputPin] = {}
+        output_blocks: Dict[str, HierOutputPin] = {}
+
+        for block_dict in data.get("blocks", []):
+            block = block_from_dict(block_dict)
+            if isinstance(block, HierSubcircuit):
+                block.subcircuit_path = _resolve_subcircuit_path(block.subcircuit_path, base_dir)
+                block.reload()
+            blocks[block.block_id] = block
+            if isinstance(block, HierInputPin):
+                input_blocks[block.pin_name] = block
+            elif isinstance(block, HierOutputPin):
+                block.last_signal = None
+                output_blocks[block.pin_name] = block
+
+        connections = data.get("connections", [])
+        adjacency: Dict[Tuple[str, str], List[Tuple[str, str]]] = {}
+        for conn in connections:
+            src_key = (conn["src_block_id"], conn["src_port"])
+            adjacency.setdefault(src_key, []).append((conn["dst_block_id"], conn["dst_port"]))
+
+        signals_at: Dict[str, Dict[str, Signal]] = {}
+        queue: List[Tuple[str, str, Signal]] = []
+
+        for pin_name, pin_block in input_blocks.items():
+            incoming = self._external_inputs.get(pin_name)
+            if incoming is None or pin_block.comment_mode == "out":
+                continue
+            produced = pin_block.process(incoming, pin_name)
+            for out_port, out_sig in produced.items():
+                signals_at.setdefault(pin_block.block_id, {})[out_port] = out_sig
+                queue.append((pin_block.block_id, out_port, out_sig))
+
+        max_iterations = max(
+            _MIN_PROPAGATION_ITERATIONS,
+            len(connections) * _ITERATIONS_PER_CONNECTION,
+        )
+        iterations = 0
+        while queue:
+            iterations += 1
+            if iterations > max_iterations:
+                break
+            src_bid, src_port, sig = queue.pop(0)
+            for dst_bid, dst_port in adjacency.get((src_bid, src_port), []):
+                dst_block = blocks.get(dst_bid)
+                if dst_block is None:
+                    continue
+                merged_in = _merge_signals(signals_at.setdefault(dst_bid, {}).get(dst_port), sig)
+                prev_in = signals_at.setdefault(dst_bid, {}).get(dst_port)
+                signals_at.setdefault(dst_bid, {})[dst_port] = merged_in
+                if _signals_equivalent(prev_in, merged_in):
+                    continue
+                if dst_block.comment_mode == "out":
+                    continue
+                if dst_block.comment_mode == "through":
+                    result = {p.name: merged_in.copy() for p in dst_block.output_ports}
+                else:
+                    result = dst_block.process(merged_in, dst_port)
+                    for out_sig in result.values():
+                        in_noise_floor = merged_in.get_noise_floor_dbm()
+                        if in_noise_floor is not None:
+                            effective_gain = out_sig.power_dbm - merged_in.power_dbm
+                            out_noise_floor = in_noise_floor + effective_gain + max(0.0, dst_block.nf_db)
+                            out_sig.set_noise_floor_dbm(out_noise_floor)
+                        elif merged_in.snr_db is not None and out_sig.snr_db is None:
+                            out_sig.snr_db = merged_in.snr_db - max(0.0, dst_block.nf_db)
+                for out_port, out_sig in result.items():
+                    prev_out = signals_at.setdefault(dst_bid, {}).get(out_port)
+                    if _signals_equivalent(prev_out, out_sig):
+                        continue
+                    signals_at.setdefault(dst_bid, {})[out_port] = out_sig
+                    queue.append((dst_bid, out_port, out_sig))
+
+        outputs: Dict[str, Signal] = {}
+        for pin_name, out_block in output_blocks.items():
+            if out_block.last_signal is not None:
+                outputs[pin_name] = out_block.last_signal.copy()
+        return outputs
 
     def to_dict(self) -> dict:
         d = super().to_dict()
