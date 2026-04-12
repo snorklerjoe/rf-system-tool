@@ -449,6 +449,7 @@ class ActualSpectrumPlot(QWidget):
             spur_color = tuple(max(0, int(c * 0.65)) for c in color)
             for j, (freq_hz, power_dbm, is_carrier) in enumerate(comps):
                 tone_color = color if is_carrier else spur_color
+                # Add exactly one legend entry per selected signal to avoid duplicates.
                 legend_name = label if not legend_added else None
                 self._draw_impulse(
                     freq_hz,

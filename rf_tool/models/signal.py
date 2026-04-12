@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Callable, Tuple
 import math
 
+_FREQUENCY_TOLERANCE_HZ = 1e-3
+
 
 @dataclass
 class SpurTone:
@@ -95,7 +97,7 @@ class Signal:
             power_mw = 10.0 ** (power_dbm / 10.0)
             merged = False
             for idx, (f_bin, p_bin_mw) in enumerate(bins):
-                if abs(f_bin - freq_hz) < 1e-3:
+                if abs(f_bin - freq_hz) < _FREQUENCY_TOLERANCE_HZ:
                     bins[idx] = (f_bin, p_bin_mw + power_mw)
                     merged = True
                     break
