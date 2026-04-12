@@ -448,7 +448,7 @@ class ActualSpectrumPlot(QWidget):
             spur_count = 0
 
             spur_color = tuple(max(0, int(c * 0.65)) for c in color)
-            ordered_comps = sorted(comps, key=lambda tone: (0 if tone[2] else 1, tone[0]))
+            ordered_comps = sorted(comps, key=lambda component: (0 if component[2] else 1, component[0]))
             for (freq_hz, power_dbm, is_carrier) in ordered_comps:
                 tone_color = color if is_carrier else spur_color
                 # Add exactly one legend entry per selected signal to avoid duplicates.
