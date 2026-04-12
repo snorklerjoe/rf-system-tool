@@ -740,6 +740,10 @@ class RFCanvasView(QGraphicsView):
 
     def touchEvent(self, event) -> bool:
         """Handle touch events for multi-touch gestures (pinch-to-zoom, pan)."""
+        from PySide6.QtCore import QEvent
+        _TOUCH_BEGIN  = QEvent.TouchBegin
+        _TOUCH_UPDATE = QEvent.TouchUpdate
+
         # PySide6 uses event.points(); fall back to touchPoints() for compatibility
         try:
             touch_points = event.points()
@@ -752,10 +756,10 @@ class RFCanvasView(QGraphicsView):
             p2 = touch_points[1].screenPos()
             distance = math.sqrt((p2.x() - p1.x()) ** 2 + (p2.y() - p1.y()) ** 2)
 
-            if event.type() == 0:  # TouchBegin
+            if event.type() == _TOUCH_BEGIN:
                 self._touch_start_distance = distance
                 self._touch_start_zoom = self._zoom
-            elif event.type() == 1:  # TouchUpdate
+            elif event.type() == _TOUCH_UPDATE:
                 if self._touch_start_distance > 0:
                     scale_factor = distance / self._touch_start_distance
                     new_zoom = self._touch_start_zoom * scale_factor
@@ -766,7 +770,7 @@ class RFCanvasView(QGraphicsView):
         elif len(touch_points) == 1:
             # Single-finger pan
             touch_point = touch_points[0]
-            if event.type() == 1:  # TouchUpdate
+            if event.type() == _TOUCH_UPDATE:
                 try:
                     delta = touch_point.screenPos() - touch_point.lastScreenPos()
                 except AttributeError:

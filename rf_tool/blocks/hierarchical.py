@@ -138,7 +138,7 @@ def _load_pins_from_file(path: str):
         output_pins: List[str] = []
         for block_dict in data.get("blocks", []):
             bt = block_dict.get("block_type", "")
-            pin_name = block_dict.get("pin_name", block_dict.get("label", "pin"))
+            pin_name = block_dict.get("pin_name") or block_dict.get("label") or "pin"
             if bt == "HierInputPin":
                 input_pins.append(pin_name)
             elif bt == "HierOutputPin":
