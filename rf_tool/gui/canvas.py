@@ -603,7 +603,7 @@ class RFScene(QGraphicsScene):
             text = f"{pwr:.2f} dBm" if math.isfinite(pwr) else "-∞ dBm"
             w.set_power_label(text, color)
 
-        if iterations > max_iterations:
+        if iterations >= max_iterations:
             if message_callback is not None:
                 message_callback(
                     "propagation reached iteration cap before convergence; results may be partial.",
