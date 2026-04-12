@@ -14,6 +14,8 @@ from PySide6.QtWidgets import (
     QFileDialog, QMessageBox, QWidget, QLabel, QMenu, QApplication,
 )
 from PySide6.QtGui import QAction, QKeySequence, QBrush, QColor
+    QFileDialog, QMessageBox, QWidget, QLabel, QMenu,
+)
 from PySide6.QtCore import Qt, QPointF, QSettings
 
 from rf_tool.gui.canvas import RFScene, RFCanvasView, WireItem
