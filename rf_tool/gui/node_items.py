@@ -766,7 +766,7 @@ class HierSubcircuitItem(BlockItem):
                 painter.drawLine(QPointF(x, 0), QPointF(x + h, h))
             painter.setPen(QPen(QColor("#FF6666"), 2.0))
             painter.setFont(QFont("Arial", 10, QFont.Bold))
-            painter.drawText(QRectF(0, 0, w, h), Qt.AlignCenter, "⚠ MISSING")
+            painter.drawText(QRectF(0, 0, w, h), Qt.AlignCenter, "MISSING")
         else:
             color = QColor(self.block.color)
             gradient = QLinearGradient(0, 0, 0, h)
@@ -782,16 +782,50 @@ class HierSubcircuitItem(BlockItem):
             painter.setPen(QPen(Qt.white, 1.0))
             painter.setFont(QFont("Arial", 8, QFont.Bold))
             painter.drawText(QRectF(4, 2, w - 8, 18), Qt.AlignCenter, self.block.label)
-            # Pin labels (inputs on left, outputs on right)
-            painter.setFont(QFont("Arial", 7))
-            inputs = self.block.input_ports
-            for i, port in enumerate(inputs):
-                y = h * (i + 1) / (len(inputs) + 1)
-                painter.drawText(QRectF(4, y - 8, w * 0.45, 14), Qt.AlignLeft | Qt.AlignVCenter, port.name)
-            outputs = self.block.output_ports
-            for i, port in enumerate(outputs):
-                y = h * (i + 1) / (len(outputs) + 1)
-                painter.drawText(QRectF(w * 0.55, y - 8, w * 0.45 - 4, 14), Qt.AlignRight | Qt.AlignVCenter, port.name)
+            symbol = getattr(self.block, "symbol", {}) or {}
+            symbol_shapes = symbol.get("shapes", []) if isinstance(symbol, dict) else []
+            if symbol_shapes:
+                inner_top = 22.0
+                inner_h = max(10.0, h - inner_top - 4.0)
+                inner_rect = QRectF(4.0, inner_top, w - 8.0, inner_h)
+
+                def map_x(px: float) -> float:
+                    return inner_rect.left() + ((px + 200.0) / 400.0) * inner_rect.width()
+
+                def map_y(py: float) -> float:
+                    return inner_rect.top() + ((py + 150.0) / 300.0) * inner_rect.height()
+
+                for shape in symbol_shapes:
+                    if shape.get("type") == "polygon":
+                        pts = shape.get("points", [])
+                        if len(pts) >= 3:
+                            poly = QPolygonF([QPointF(map_x(float(p[0])), map_y(float(p[1]))) for p in pts])
+                            col = QColor(shape.get("color", "#FFFFFF"))
+                            painter.setPen(QPen(col, 1.5))
+                            painter.setBrush(QBrush(col if shape.get("filled", True) else Qt.NoBrush))
+                            painter.drawPolygon(poly)
+                    elif shape.get("type") == "text":
+                        text = shape.get("text", "")
+                        if text:
+                            col = QColor(shape.get("color", "#FFFFFF"))
+                            size = int(shape.get("size", 10))
+                            painter.setPen(QPen(col, 1))
+                            painter.setFont(QFont("Arial", max(6, size)))
+                            painter.drawText(
+                                QPointF(map_x(float(shape.get("x", 0.0))), map_y(float(shape.get("y", 0.0)))),
+                                text,
+                            )
+            else:
+                # Pin labels (inputs on left, outputs on right)
+                painter.setFont(QFont("Arial", 7))
+                inputs = self.block.input_ports
+                for i, port in enumerate(inputs):
+                    y = h * (i + 1) / (len(inputs) + 1)
+                    painter.drawText(QRectF(4, y - 8, w * 0.45, 14), Qt.AlignLeft | Qt.AlignVCenter, port.name)
+                outputs = self.block.output_ports
+                for i, port in enumerate(outputs):
+                    y = h * (i + 1) / (len(outputs) + 1)
+                    painter.drawText(QRectF(w * 0.55, y - 8, w * 0.45 - 4, 14), Qt.AlignRight | Qt.AlignVCenter, port.name)
             # Border
             painter.setPen(QPen(QColor("#AA88FF"), 2.0))
             painter.setBrush(Qt.NoBrush)

@@ -14,8 +14,6 @@ from PySide6.QtWidgets import (
     QFileDialog, QMessageBox, QWidget, QLabel, QMenu, QApplication,
 )
 from PySide6.QtGui import QAction, QKeySequence, QBrush, QColor
-    QFileDialog, QMessageBox, QWidget, QLabel, QMenu,
-)
 from PySide6.QtCore import Qt, QPointF, QSettings
 
 from rf_tool.gui.canvas import RFScene, RFCanvasView, WireItem
@@ -49,6 +47,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("RF System Tool")
         self.resize(1200, 760)
         self._current_file: Optional[str] = None
+        self._scene_metadata: Dict = {}
         self._p2p_start: Optional[str] = None
         self._p2p_end: Optional[str] = None
         self._child_windows: List[QMainWindow] = []
@@ -74,6 +73,7 @@ class MainWindow(QMainWindow):
 
         # Apply default theme
         self._apply_theme("Dark")
+        self._refresh_subcircuit_buttons()
 
     # ------------------------------------------------------------------ #
     # Setup                                                                #
@@ -391,22 +391,26 @@ class MainWindow(QMainWindow):
         self._status.showMessage(f"Reloaded {reloaded} subcircuit block(s)")
 
     def _open_symbol_editor(self) -> None:
-        """Open the symbol editor for the selected HierSubcircuit block."""
+        """Open the symbol editor for the currently open circuit."""
         from rf_tool.gui.symbol_editor import SymbolEditorDialog
-        selected = [i for i in self._scene.selectedItems() if isinstance(i, BlockItem)
-                    and isinstance(i.block, HierSubcircuit)]
-        if not selected:
+        input_pins = [
+            b.pin_name for b in self._scene.get_all_blocks()
+            if isinstance(b, HierInputPin)
+        ]
+        output_pins = [
+            b.pin_name for b in self._scene.get_all_blocks()
+            if isinstance(b, HierOutputPin)
+        ]
+        pins = input_pins + output_pins
+        if not pins:
             QMessageBox.information(self, "Symbol Editor",
-                                    "Select a Hierarchical Subcircuit block first.")
+                                    "Add at least one Hierarchical In/Out Pin in this circuit first.")
             return
-        item = selected[0]
-        block = item.block
-        pins = [p.name for p in block.input_ports] + [p.name for p in block.output_ports]
-        dlg = SymbolEditorDialog(pins=pins, initial_symbol=block.symbol, parent=self)
+        initial_symbol = self._scene_metadata.get("symbol", {})
+        dlg = SymbolEditorDialog(pins=pins, initial_symbol=initial_symbol, parent=self)
         if dlg.exec():
-            block.symbol = dlg.get_symbol()
-            item.update()
-            self._status.showMessage("Symbol updated")
+            self._scene_metadata["symbol"] = dlg.get_symbol()
+            self._status.showMessage("Circuit symbol updated")
 
     def _scan_for_subcircuits(self) -> List[tuple]:
         """
@@ -415,16 +419,19 @@ class MainWindow(QMainWindow):
 
         Returns list of (label, path) tuples.
         """
-        if not self._current_file:
-            return []
-        directory = os.path.dirname(os.path.abspath(self._current_file))
+        if self._current_file:
+            directory = os.path.dirname(os.path.abspath(self._current_file))
+            current_file = os.path.abspath(self._current_file)
+        else:
+            directory = os.getcwd()
+            current_file = None
         results = []
         try:
             for fname in sorted(os.listdir(directory)):
                 if not fname.endswith(".json"):
                     continue
                 fpath = os.path.join(directory, fname)
-                if os.path.abspath(fpath) == os.path.abspath(self._current_file):
+                if current_file and os.path.abspath(fpath) == current_file:
                     continue
                 try:
                     with open(fpath, "r", encoding="utf-8") as fh:
@@ -438,6 +445,11 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         return results
+
+    def _refresh_subcircuit_buttons(self) -> None:
+        """Refresh discovered subcircuit buttons in the ribbon."""
+        if hasattr(self, "_ribbon"):
+            self._ribbon.refresh_subcircuit_buttons(self._scan_for_subcircuits())
 
     # ------------------------------------------------------------------ #
     # Theme support                                                        #
@@ -890,8 +902,10 @@ class MainWindow(QMainWindow):
         if reply == QMessageBox.Yes:
             self._scene.clear_scene()
             self._current_file = None
+            self._scene_metadata = {}
             self.setWindowTitle("RF System Tool")
             self._status.showMessage("New scene")
+            self._refresh_subcircuit_buttons()
 
     def _open_scene(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -917,6 +931,7 @@ class MainWindow(QMainWindow):
                 item = AnnotationItem.from_dict(ann)
                 self._scene.addItem(item)
             self._current_file = path
+            self._scene_metadata = dict(data.get("metadata", {}))
             self.setWindowTitle(f"RF System Tool — {os.path.basename(path)}")
             self._status.showMessage(f"Loaded {path}")
             self._add_recent_file(path)
@@ -935,9 +950,7 @@ class MainWindow(QMainWindow):
                 )
 
             # Refresh subcircuit buttons in ribbon
-            subcircuits = self._scan_for_subcircuits()
-            if hasattr(self, "_ribbon"):
-                self._ribbon.refresh_subcircuit_buttons(subcircuits)
+            self._refresh_subcircuit_buttons()
 
         except Exception as exc:
             QMessageBox.critical(self, "Open Error", str(exc))
@@ -960,11 +973,18 @@ class MainWindow(QMainWindow):
             blocks = self._scene.get_all_blocks()
             connections = self._scene.get_connections()
             annotations = [item.to_dict() for item in self._scene.get_annotations()]
-            save_scene(blocks, connections, annotations, filepath=path)
+            save_scene(
+                blocks,
+                connections,
+                annotations,
+                filepath=path,
+                metadata=self._scene_metadata,
+            )
             self._current_file = path
             self.setWindowTitle(f"RF System Tool — {os.path.basename(path)}")
             self._status.showMessage(f"Saved {path}")
             self._add_recent_file(path)
+            self._refresh_subcircuit_buttons()
         except Exception as exc:
             QMessageBox.critical(self, "Save Error", str(exc))
 

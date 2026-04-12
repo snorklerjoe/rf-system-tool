@@ -127,10 +127,10 @@ def _load_pins_from_file(path: str):
     """
     Parse *path* (a JSON scene file) and return lists of input/output pin names.
 
-    Returns (input_pin_names, output_pin_names, file_missing).
+    Returns (input_pin_names, output_pin_names, file_missing, symbol).
     """
     if not os.path.isfile(path):
-        return [], [], True
+        return [], [], True, {}
     try:
         with open(path, "r", encoding="utf-8") as fh:
             data = json.load(fh)
@@ -143,9 +143,11 @@ def _load_pins_from_file(path: str):
                 input_pins.append(pin_name)
             elif bt == "HierOutputPin":
                 output_pins.append(pin_name)
-        return input_pins, output_pins, False
+        metadata = data.get("metadata", {})
+        symbol = metadata.get("symbol", {}) if isinstance(metadata, dict) else {}
+        return input_pins, output_pins, False, symbol
     except Exception:
-        return [], [], True
+        return [], [], True, {}
 
 
 class HierSubcircuit(RFBlock):
@@ -178,10 +180,12 @@ class HierSubcircuit(RFBlock):
         super().__init__(**kwargs)
 
     def _setup_ports(self) -> None:
-        inp, out, missing = _load_pins_from_file(self.subcircuit_path)
+        inp, out, missing, symbol = _load_pins_from_file(self.subcircuit_path)
         self.file_missing = missing
         self._input_pin_names = inp
         self._output_pin_names = out
+        if not missing:
+            self.symbol = symbol or {}
         self._input_ports = [Port(n, "input", i) for i, n in enumerate(inp)]
         self._output_ports = [Port(n, "output", i) for i, n in enumerate(out)]
 

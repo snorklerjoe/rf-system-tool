@@ -12,9 +12,10 @@ from typing import Callable, List, Optional, Tuple
 
 from PySide6.QtWidgets import (
     QWidget, QTabWidget, QToolButton, QHBoxLayout, QVBoxLayout,
-    QPushButton, QSizePolicy, QFrame,
+    QPushButton, QSizePolicy, QFrame, QTabBar,
 )
 from PySide6.QtCore import Qt, Signal, QSize
+from PySide6.QtGui import QPainter, QColor, QPen
 
 # ─── Style constants ────────────────────────────────────────────────────────
 
@@ -33,18 +34,6 @@ _ALWAYS_VISIBLE_QSS = """
 
 _TAB_QSS = """
     QTabWidget::pane { border: none; margin: 0px; padding: 0px; }
-    QTabBar::tab {
-        background: #2D2D44;
-        color: #CCCCEE;
-        font-weight: bold;
-        padding: 5px 14px;
-        border: 1px solid #44445A;
-        border-bottom: none;
-        border-top-left-radius: 4px;
-        border-top-right-radius: 4px;
-    }
-    QTabBar::tab:selected { background: #3A7BD5; color: #FFFFFF; }
-    QTabBar::tab:hover:!selected { background: #3A3A5C; }
 """
 
 _BTN_BASE = """
@@ -65,6 +54,30 @@ _BLUE   = _BTN_BASE.format(bg="#2C4E8A", border="#3A6AB5", hover="#3A6AB5", pres
 _GREEN  = _BTN_BASE.format(bg="#1E6B3C", border="#2A8A4E", hover="#2A8A4E", pressed="#145230")
 _ORANGE = _BTN_BASE.format(bg="#7A4010", border="#AA5820", hover="#AA5820", pressed="#5A2C08")
 _PURPLE = _BTN_BASE.format(bg="#5A2A7A", border="#7A4AAA", hover="#7A4AAA", pressed="#3A1A5A")
+_TAB_COLORS = {
+    0: ("#2C4E8A", "#3A6AB5"),
+    1: ("#1E6B3C", "#2A8A4E"),
+    2: ("#7A4010", "#AA5820"),
+    3: ("#5A2A7A", "#7A4AAA"),
+}
+
+
+class _ColoredTabBar(QTabBar):
+    """Color each tab to match its ribbon section."""
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, False)
+        for index in range(self.count()):
+            rect = self.tabRect(index)
+            bg, border = _TAB_COLORS.get(index, ("#2D2D44", "#44445A"))
+            if index != self.currentIndex():
+                bg = "#242433"
+            painter.fillRect(rect, QColor(bg))
+            painter.setPen(QPen(QColor(border), 1))
+            painter.drawRect(rect.adjusted(0, 0, -1, -1))
+            painter.setPen(QPen(Qt.white, 1))
+            painter.drawText(rect, Qt.AlignCenter, self.tabText(index))
 
 # ─── Helper ──────────────────────────────────────────────────────────────────
 
@@ -171,12 +184,12 @@ class RibbonWidget(QWidget):
         always_lay.setContentsMargins(4, 2, 4, 2)
         always_lay.setSpacing(6)
 
-        btn_fit = QPushButton("🔍 Fit")
+        btn_fit = QPushButton("Zoom Fit")
         btn_fit.setToolTip("Zoom to Fit All (Home)")
         btn_fit.setStyleSheet(_ALWAYS_VISIBLE_QSS)
         btn_fit.clicked.connect(self.sig_zoom_fit)
 
-        btn_prop = QPushButton("⚡ Propagate")
+        btn_prop = QPushButton("Propagate")
         btn_prop.setToolTip("Propagate Signals through the circuit")
         btn_prop.setStyleSheet(_ALWAYS_VISIBLE_QSS)
         btn_prop.clicked.connect(self.sig_propagate)
@@ -188,6 +201,7 @@ class RibbonWidget(QWidget):
 
         # ── Tab widget ───────────────────────────────────────────────────
         self._tabs = QTabWidget()
+        self._tabs.setTabBar(_ColoredTabBar())
         self._tabs.setStyleSheet(_TAB_QSS)
         self._tabs.setTabPosition(QTabWidget.North)
         self._tabs.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
@@ -202,21 +216,21 @@ class RibbonWidget(QWidget):
     # ─── Components ──────────────────────────────────────────────────────
     def _build_components_tab(self) -> QWidget:
         btns = [
-            _btn("~ Src",    "Add Source",      _BLUE, self.sig_add_source),
-            _btn("⊥ Snk",    "Add Sink",        _BLUE, self.sig_add_sink),
+            _btn("Src",      "Add Source",      _BLUE, self.sig_add_source),
+            _btn("Snk",      "Add Sink",        _BLUE, self.sig_add_sink),
             None,
-            _btn("▶ Amp",    "Add Amplifier",   _BLUE, self.sig_add_amplifier),
-            _btn("⬡ Att",    "Add Attenuator",  _BLUE, self.sig_add_attenuator),
-            _btn("✕ Mix",    "Add Mixer",       _BLUE, self.sig_add_mixer),
-            _btn("⇀ SW",     "Add Switch",      _BLUE, self.sig_add_switch),
+            _btn("Amp",      "Add Amplifier",   _BLUE, self.sig_add_amplifier),
+            _btn("Att",      "Add Attenuator",  _BLUE, self.sig_add_attenuator),
+            _btn("Mix",      "Add Mixer",       _BLUE, self.sig_add_mixer),
+            _btn("SW",       "Add Switch",      _BLUE, self.sig_add_switch),
             None,
             _btn("[S] Spar", "Add S-Parameter Block", _BLUE, self.sig_add_spar),
-            _btn("⨍ TF",     "Add Transfer Function", _BLUE, self.sig_add_transfer_fn),
-            _btn("⊓ LPF",   "Add Low-Pass Filter",   _BLUE, self.sig_add_lpf),
-            _btn("⊔ HPF",   "Add High-Pass Filter",  _BLUE, self.sig_add_hpf),
+            _btn("TF",       "Add Transfer Function", _BLUE, self.sig_add_transfer_fn),
+            _btn("LPF",      "Add Low-Pass Filter",   _BLUE, self.sig_add_lpf),
+            _btn("HPF",      "Add High-Pass Filter",  _BLUE, self.sig_add_hpf),
             None,
-            _btn("⊕ Spl",    "Add Splitter",    _BLUE, self.sig_add_splitter),
-            _btn("⊗ Cmb",    "Add Combiner",    _BLUE, self.sig_add_combiner),
+            _btn("Spl",      "Add Splitter",    _BLUE, self.sig_add_splitter),
+            _btn("Cmb",      "Add Combiner",    _BLUE, self.sig_add_combiner),
             None,
             _btn("T Ann",    "Add Annotation",  _BLUE, self.sig_add_annotation),
         ]
@@ -225,26 +239,26 @@ class RibbonWidget(QWidget):
     # ─── Analysis ────────────────────────────────────────────────────────
     def _build_analysis_tab(self) -> QWidget:
         btns = [
-            _btn("📐 P2P Cascade",    "Point-to-Point Cascade Analysis", _GREEN, self.sig_p2p_cascade),
-            _btn("📈 Freq Plot",       "Gain/NF vs Frequency Plot",       _GREEN, self.sig_freq_plot),
-            _btn("📊 Signal Spectrum", "Signal Spectrum Viewer",          _GREEN, self.sig_signal_spectrum),
-            _btn("📉 Freq Response",   "Frequency Response View",         _GREEN, self.sig_freq_response),
+            _btn("P2P Cascade",       "Point-to-Point Cascade Analysis", _GREEN, self.sig_p2p_cascade),
+            _btn("Freq Plot",         "Gain/NF vs Frequency Plot",       _GREEN, self.sig_freq_plot),
+            _btn("Signal Spectrum",   "Signal Spectrum Viewer",          _GREEN, self.sig_signal_spectrum),
+            _btn("Freq Response",     "Frequency Response View",         _GREEN, self.sig_freq_response),
         ]
         return _make_row(*btns)
 
     # ─── Tools ───────────────────────────────────────────────────────────
     def _build_tools_tab(self) -> QWidget:
         btns = [
-            _btn("✂ Cut",            "Cut selected",          _ORANGE, self.sig_cut),
-            _btn("⎘ Copy",           "Copy selected",         _ORANGE, self.sig_copy),
-            _btn("📋 Paste",          "Paste clipboard",       _ORANGE, self.sig_paste),
+            _btn("Cut",              "Cut selected",          _ORANGE, self.sig_cut),
+            _btn("Copy",             "Copy selected",         _ORANGE, self.sig_copy),
+            _btn("Paste",            "Paste clipboard",       _ORANGE, self.sig_paste),
             None,
-            _btn("💤 Comment Out",   "Comment out selected",  _ORANGE, self.sig_comment_out),
-            _btn("⤳ Comment Thru",   "Comment through",       _ORANGE, self.sig_comment_through),
-            _btn("✓ Uncomment",      "Uncomment selected",    _ORANGE, self.sig_uncomment),
+            _btn("Comment Out",      "Comment out selected",  _ORANGE, self.sig_comment_out),
+            _btn("Comment Thru",     "Comment through",       _ORANGE, self.sig_comment_through),
+            _btn("Uncomment",        "Uncomment selected",    _ORANGE, self.sig_uncomment),
             None,
             _btn("Select All",       "Select all items",      _ORANGE, self.sig_select_all),
-            _btn("🗑 Delete",         "Delete selected",       _ORANGE, self.sig_delete_selected),
+            _btn("Delete",           "Delete selected",       _ORANGE, self.sig_delete_selected),
         ]
         return _make_row(*btns)
 
@@ -256,12 +270,12 @@ class RibbonWidget(QWidget):
         self._hier_lay.setSpacing(4)
 
         fixed_btns = [
-            _btn("→| In Pin",   "Add Hierarchical Input Pin",   _PURPLE, self.sig_add_hier_input),
-            _btn("|→ Out Pin",  "Add Hierarchical Output Pin",  _PURPLE, self.sig_add_hier_output),
+            _btn("In Pin",      "Add Hierarchical Input Pin",   _PURPLE, self.sig_add_hier_input),
+            _btn("Out Pin",     "Add Hierarchical Output Pin",  _PURPLE, self.sig_add_hier_output),
             None,
-            _btn("✏ Symbol Ed.", "Open Symbol Editor",          _PURPLE, self.sig_open_symbol_editor),
+            _btn("Symbol Ed.",  "Open Symbol Editor",           _PURPLE, self.sig_open_symbol_editor),
             None,
-            _btn("🔄 Reload All", "Reload all subcircuit blocks", _PURPLE, self.sig_reload_all),
+            _btn("Reload All",  "Reload all subcircuit blocks", _PURPLE, self.sig_reload_all),
             None,
         ]
         for item in fixed_btns:
@@ -299,7 +313,7 @@ class RibbonWidget(QWidget):
             self._hier_lay.removeItem(stretch_item)
 
         for label, path in subcircuit_list:
-            btn = _btn(f"📦 {label}", f"Add subcircuit: {path}", _PURPLE)
+            btn = _btn(f"Sub: {label}", f"Add subcircuit: {path}", _PURPLE)
             btn.clicked.connect(lambda checked=False, p=path: self.sig_add_subcircuit.emit(p))
             self._hier_lay.addWidget(btn)
             self._subcircuit_btns.append(btn)
