@@ -909,6 +909,8 @@ class Sink(RFBlock):
 # Block registry                                                           #
 # ======================================================================= #
 
+from rf_tool.blocks.hierarchical import HierInputPin, HierOutputPin, HierSubcircuit  # noqa: E402
+
 BLOCK_REGISTRY: Dict[str, type] = {
     "RFBlock": RFBlock,
     "Amplifier": Amplifier,
@@ -923,6 +925,9 @@ BLOCK_REGISTRY: Dict[str, type] = {
     "Switch": Switch,
     "Source": Source,
     "Sink": Sink,
+    "HierInputPin": HierInputPin,
+    "HierOutputPin": HierOutputPin,
+    "HierSubcircuit": HierSubcircuit,
 }
 
 

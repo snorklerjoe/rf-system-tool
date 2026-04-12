@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
     QGraphicsPathItem, QGraphicsSimpleTextItem, QGraphicsItem,
 )
 from PySide6.QtGui import QPen, QColor, QPainterPath, QBrush, QTransform
-from PySide6.QtCore import Qt, QPointF, Signal
+from PySide6.QtCore import Qt, QPointF, QPoint, Signal
 
 from rf_tool.models.rf_block import RFBlock
 from rf_tool.models.signal import Signal as RFSignal
@@ -616,11 +616,16 @@ class RFCanvasView(QGraphicsView):
     def __init__(self, scene: RFScene, parent=None):
         super().__init__(scene, parent)
         self.setRenderHint(self.renderHints() | self.renderHints().Antialiasing)
-        self.setDragMode(QGraphicsView.NoDrag)
+        # Rubber-band for multi-selection; right-click drag pans manually
+        self.setDragMode(QGraphicsView.RubberBandDrag)
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.AnchorUnderMouse)
         self._zoom = 1.0
-        
+
+        # Right-click pan state
+        self._panning = False
+        self._pan_start = None
+
         # Touch gestures
         self.setAttribute(Qt.WA_AcceptTouchEvents, True)
         self._touch_start_distance = 0.0
@@ -631,6 +636,48 @@ class RFCanvasView(QGraphicsView):
         self._zoom *= factor
         self._zoom = max(0.1, min(self._zoom, 10.0))
         self.setTransform(QTransform().scale(self._zoom, self._zoom))
+
+    # ------------------------------------------------------------------ #
+    # Right-click panning                                                  #
+    # ------------------------------------------------------------------ #
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.RightButton:
+            self._panning = True
+            self._pan_start = event.pos()
+            self.setCursor(Qt.ClosedHandCursor)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._panning and self._pan_start is not None:
+            delta = event.pos() - self._pan_start
+            self._pan_start = event.pos()
+            self.horizontalScrollBar().setValue(
+                self.horizontalScrollBar().value() - delta.x()
+            )
+            self.verticalScrollBar().setValue(
+                self.verticalScrollBar().value() - delta.y()
+            )
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.RightButton and self._panning:
+            self._panning = False
+            self._pan_start = None
+            self.setCursor(Qt.ArrowCursor)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def contextMenuEvent(self, event) -> None:
+        # Suppress context menu while or just after panning
+        if self._panning:
+            event.accept()
+            return
+        super().contextMenuEvent(event)
 
     def zoom_in(self) -> None:
         """Zoom in."""
@@ -693,13 +740,18 @@ class RFCanvasView(QGraphicsView):
 
     def touchEvent(self, event) -> bool:
         """Handle touch events for multi-touch gestures (pinch-to-zoom, pan)."""
-        if event.touchPoints().count() == 2:
-            # Two-finger pinch-to-zoom
+        # PySide6 uses event.points(); fall back to touchPoints() for compatibility
+        try:
+            touch_points = event.points()
+        except AttributeError:
             touch_points = event.touchPoints()
+
+        if len(touch_points) == 2:
+            # Two-finger pinch-to-zoom
             p1 = touch_points[0].screenPos()
             p2 = touch_points[1].screenPos()
             distance = math.sqrt((p2.x() - p1.x()) ** 2 + (p2.y() - p1.y()) ** 2)
-            
+
             if event.type() == 0:  # TouchBegin
                 self._touch_start_distance = distance
                 self._touch_start_zoom = self._zoom
@@ -711,11 +763,19 @@ class RFCanvasView(QGraphicsView):
                     self._zoom = new_zoom
                     self.setTransform(QTransform().scale(self._zoom, self._zoom))
             return True
-        elif event.touchPoints().count() == 1:
+        elif len(touch_points) == 1:
             # Single-finger pan
-            touch_point = event.touchPoints()[0]
+            touch_point = touch_points[0]
             if event.type() == 1:  # TouchUpdate
-                delta = touch_point.screenPos() - touch_point.lastScreenPos()
-                self.translate(delta.x(), delta.y())
+                try:
+                    delta = touch_point.screenPos() - touch_point.lastScreenPos()
+                except AttributeError:
+                    delta = touch_point.screenPos() - touch_point.startScreenPos()
+                self.horizontalScrollBar().setValue(
+                    self.horizontalScrollBar().value() - int(delta.x())
+                )
+                self.verticalScrollBar().setValue(
+                    self.verticalScrollBar().value() - int(delta.y())
+                )
             return True
         return False
