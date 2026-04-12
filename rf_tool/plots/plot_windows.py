@@ -44,9 +44,9 @@ _NOISE_COLOR = (80, 80, 80)       # dark grey for noise trace
 _NOISE_FLOOR_LINE_COLOR = (140, 140, 140)  # slightly brighter for the reference line
 
 
-def _format_freq_label_hz(freq_hz: float, tooltip: str = "") -> str:
+def _format_freq_label_hz(freq: float, tooltip: str = "") -> str:
     """Return tooltip label text with a numeric fallback to avoid format/type errors."""
-    return tooltip if tooltip else f"{freq_hz:.2e} Hz"
+    return tooltip if tooltip else f"{freq:.2e} Hz"
 
 
 def _draw_noise_floor(plot_widget: pg.PlotWidget,

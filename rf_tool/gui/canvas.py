@@ -511,8 +511,11 @@ class RFScene(QGraphicsScene):
                 item.set_power_warning("ok")
 
         if message_callback is not None:
+            signal_word = "signal" if len(queue) == 1 else "signals"
+            connection_word = "connection" if len(self._connections) == 1 else "connections"
             message_callback(
-                f"propagation seeded with {len(queue)} source signal(s) across {len(self._connections)} connection(s).",
+                f"propagation seeded with {len(queue)} source {signal_word} across "
+                f"{len(self._connections)} {connection_word}.",
                 "info",
             )
 
@@ -568,8 +571,9 @@ class RFScene(QGraphicsScene):
                     if message_callback is not None:
                         for out_port, out_sig in result.items():
                             n_tones = 1 + len(out_sig.spurs)
+                            tone_word = "tone" if n_tones == 1 else "tones"
                             message_callback(
-                                f"{dst_item.block.label}:{out_port} updated with {n_tones} tone(s); "
+                                f"{dst_item.block.label}:{out_port} updated with {n_tones} {tone_word}; "
                                 f"carrier {out_sig.carrier_frequency/1e9:.6g} GHz @ {out_sig.power_dbm:.2f} dBm.",
                                 "info",
                             )
