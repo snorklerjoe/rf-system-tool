@@ -456,6 +456,7 @@ class HierSubcircuit(RFBlock):
             adjacency.setdefault(src_key, []).append((conn["dst_block_id"], conn["dst_port"]))
 
         signals_at: Dict[str, Dict[str, Signal]] = {}
+        wire_signals: Dict[Tuple[str, str], Dict[Tuple[str, str, str, str], Signal]] = {}
         queue: List[Tuple[str, str, Signal]] = []
 
         for pin_name, pin_block in input_blocks.items():
@@ -481,8 +482,20 @@ class HierSubcircuit(RFBlock):
                 dst_block = blocks.get(dst_bid)
                 if dst_block is None:
                     continue
-                merged_in = _merge_signals(signals_at.setdefault(dst_bid, {}).get(dst_port), sig)
                 prev_in = signals_at.setdefault(dst_bid, {}).get(dst_port)
+                c_key = (src_bid, src_port, dst_bid, dst_port)
+                port_key = (dst_bid, dst_port)
+                per_wire = wire_signals.setdefault(port_key, {})
+                prev_wire_sig = per_wire.get(c_key)
+                if _signals_equivalent(prev_wire_sig, sig):
+                    continue
+                per_wire[c_key] = sig.copy()
+
+                merged_in: Optional[Signal] = None
+                for wire_sig in per_wire.values():
+                    merged_in = wire_sig.copy() if merged_in is None else _merge_signals(merged_in, wire_sig)
+                if merged_in is None:
+                    continue
                 signals_at.setdefault(dst_bid, {})[dst_port] = merged_in
                 if _signals_equivalent(prev_in, merged_in):
                     continue

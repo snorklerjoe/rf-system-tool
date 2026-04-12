@@ -491,6 +491,7 @@ class RFScene(QGraphicsScene):
             adj.setdefault(key, []).append((c["dst_block_id"], c["dst_port"]))
 
         wire_power: Dict[Tuple[str, str, str, str], float] = {}
+        wire_signals: Dict[Tuple[str, str], Dict[Tuple[str, str, str, str], RFSignal]] = {}
         for w in self._wires:
             key = (
                 w.src_port.parentItem().block.block_id,
@@ -538,8 +539,19 @@ class RFScene(QGraphicsScene):
                     continue
                 c_key = (src_bid, src_port, dst_bid, dst_port)
                 wire_power[c_key] = sig.total_power_dbm()
-                merged_in = self._merge_signals(signals_at.setdefault(dst_bid, {}).get(dst_port), sig)
                 prev_in = signals_at.setdefault(dst_bid, {}).get(dst_port)
+                port_key = (dst_bid, dst_port)
+                per_wire = wire_signals.setdefault(port_key, {})
+                prev_wire_sig = per_wire.get(c_key)
+                if self._signals_equivalent(prev_wire_sig, sig):
+                    continue
+                per_wire[c_key] = sig.copy()
+
+                merged_in: Optional[RFSignal] = None
+                for wire_sig in per_wire.values():
+                    merged_in = wire_sig.copy() if merged_in is None else self._merge_signals(merged_in, wire_sig)
+                if merged_in is None:
+                    continue
                 signals_at.setdefault(dst_bid, {})[dst_port] = merged_in
 
                 # Power warning
@@ -579,7 +591,7 @@ class RFScene(QGraphicsScene):
                             message_callback(
                                 f"{dst_item.block.label}:{out_port} updated with "
                                 f"{n_tones} {_pluralized(n_tones, 'tone')}; "
-                                f"carrier {out_sig.carrier_frequency/1e9:.6g} GHz @ {out_sig.power_dbm:.2f} dBm.",
+                                f"primary tone {out_sig.carrier_frequency/1e9:.6g} GHz @ {out_sig.power_dbm:.2f} dBm.",
                                 "info",
                             )
 
