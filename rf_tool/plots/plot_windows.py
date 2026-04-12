@@ -451,11 +451,12 @@ class ActualSpectrumPlot(QWidget):
                 tone_color = color if is_carrier else spur_color
                 # Add exactly one legend entry per selected signal to avoid duplicates.
                 legend_name = label if not legend_added else None
+                tone_name = f"{label} carrier" if is_carrier else f"{label} spur {j+1}"
                 self._draw_impulse(
                     freq_hz,
                     power_dbm,
                     color=tone_color,
-                    name=label if is_carrier else f"{label} spur {j+1}",
+                    name=tone_name,
                     is_carrier=is_carrier,
                     tooltip=f"{freq_hz/1e9:.4f} GHz",
                     legend_name=legend_name,

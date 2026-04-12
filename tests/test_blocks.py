@@ -416,9 +416,9 @@ class TestLowPassFilter:
         f = LowPassFilter(order=4, cutoff_hz=1e9)
         sig = make_signal(fc=100e6, pwr=0.0, spurs=[SpurTone(10e9, 0.0)])
         out = f.process(sig)["OUT"]
-        high_freq_tone = min([out.power_dbm] + [s.power_dbm for s in out.spurs])
+        weakest_tone_power = min([out.power_dbm] + [s.power_dbm for s in out.spurs])
         assert out.power_dbm > -1.0  # carrier near passband
-        assert high_freq_tone < -60.0  # high-frequency spur is strongly attenuated
+        assert weakest_tone_power < -60.0  # high-frequency spur is strongly attenuated
 
     def test_round_trip(self):
         f = LowPassFilter(order=5, cutoff_hz=2.4e9)
