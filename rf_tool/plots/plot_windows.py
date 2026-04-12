@@ -445,13 +445,19 @@ class ActualSpectrumPlot(QWidget):
             color = _SIGNAL_COLORS[i % len(_SIGNAL_COLORS)]
             sig_nf = sig.get_noise_floor_dbm()
             legend_added = False
+            spur_count = 0
 
             spur_color = tuple(max(0, int(c * 0.65)) for c in color)
-            for j, (freq_hz, power_dbm, is_carrier) in enumerate(comps):
+            for _j, (freq_hz, power_dbm, is_carrier) in enumerate(comps):
                 tone_color = color if is_carrier else spur_color
                 # Add exactly one legend entry per selected signal to avoid duplicates.
                 legend_name = label if not legend_added else None
-                tone_name = f"{label} carrier" if is_carrier else f"{label} spur {j+1}"
+                if is_carrier:
+                    tone_name = f"{label} carrier"
+                else:
+                    spur_count += 1
+                    tone_name = f"{label} spur {spur_count}"
+                # name is for tone-level hover text; legend_name controls one legend row per signal.
                 self._draw_impulse(
                     freq_hz,
                     power_dbm,

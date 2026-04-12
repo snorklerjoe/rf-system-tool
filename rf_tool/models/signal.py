@@ -104,7 +104,7 @@ class Signal:
             if not merged:
                 bins.append((freq_hz, power_mw))
         out = [(f_hz, 10.0 * math.log10(max(p_mw, 1e-300))) for f_hz, p_mw in bins]
-        out.sort(key=lambda x: x[1], reverse=True)
+        out.sort(key=lambda freq_power: freq_power[1], reverse=True)
         return out
 
     def apply_frequency_response(self, gain_fn: Callable[[float], float]) -> "Signal":
