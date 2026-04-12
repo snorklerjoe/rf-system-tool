@@ -7,7 +7,9 @@ Each theme has:
 """
 from __future__ import annotations
 
-THEMES: dict = {
+from typing import Dict
+
+THEMES: Dict[str, Dict[str, str]] = {
     "Dark": {
         "qss": """
             QMainWindow, QWidget { background: #1A1A2E; color: #E0E0FF; }

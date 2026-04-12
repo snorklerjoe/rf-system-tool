@@ -4,6 +4,7 @@ Main application window for RF System Tool.
 from __future__ import annotations
 
 import os
+import json
 from typing import Optional, Dict, List
 import uuid
 import copy
@@ -417,7 +418,6 @@ class MainWindow(QMainWindow):
         directory = os.path.dirname(os.path.abspath(self._current_file))
         results = []
         try:
-            import json as _json
             for fname in sorted(os.listdir(directory)):
                 if not fname.endswith(".json"):
                     continue
@@ -426,7 +426,7 @@ class MainWindow(QMainWindow):
                     continue
                 try:
                     with open(fpath, "r", encoding="utf-8") as fh:
-                        data = _json.load(fh)
+                        data = json.load(fh)
                     block_types = {b.get("block_type", "") for b in data.get("blocks", [])}
                     if "HierInputPin" in block_types or "HierOutputPin" in block_types:
                         label = os.path.splitext(fname)[0]
