@@ -479,7 +479,7 @@ class RFScene(QGraphicsScene):
         -------
         dict mapping block_id -> last Signal received at that block.
         """
-        from rf_tool.blocks.components import Source
+        from rf_tool.blocks.components import Source, PowerCombiner
         signals_at: Dict[str, Dict[str, RFSignal]] = {}
         for item in self._block_items.values():
             item.block.reset_runtime_state()
@@ -581,14 +581,16 @@ class RFScene(QGraphicsScene):
                     if message_callback is not None:
                         for level, message in dst_item.block.pop_runtime_messages():
                             message_callback(message, level)
-                    for out_sig in result.values():
-                        in_noise_floor = merged_in.get_noise_floor_dbm()
-                        if in_noise_floor is not None:
-                            effective_gain = out_sig.total_power_dbm() - merged_in.total_power_dbm()
-                            out_noise_floor = in_noise_floor + effective_gain + max(0.0, dst_item.block.nf_db)
-                            out_sig.set_noise_floor_dbm(out_noise_floor)
-                        elif merged_in.snr_db is not None and out_sig.snr_db is None:
-                            out_sig.snr_db = merged_in.snr_db - max(0.0, dst_item.block.nf_db)
+                    apply_generic_nf = not isinstance(dst_item.block, PowerCombiner)
+                    if apply_generic_nf:
+                        for out_sig in result.values():
+                            in_noise_floor = merged_in.get_noise_floor_dbm()
+                            if in_noise_floor is not None:
+                                effective_gain = out_sig.total_power_dbm() - merged_in.total_power_dbm()
+                                out_noise_floor = in_noise_floor + effective_gain + max(0.0, dst_item.block.nf_db)
+                                out_sig.set_noise_floor_dbm(out_noise_floor)
+                            elif merged_in.snr_db is not None and out_sig.snr_db is None:
+                                out_sig.snr_db = merged_in.snr_db - max(0.0, dst_item.block.nf_db)
                     if message_callback is not None:
                         for out_port, out_sig in result.items():
                             n_tones = 1 + len(out_sig.spurs)

@@ -892,6 +892,37 @@ class TestHierSubcircuitSimulation:
         assert out["IF"].carrier_frequency == pytest.approx(100e6, rel=1e-9)
         assert out["IF"].power_dbm == pytest.approx(-17.0, abs=1e-6)
 
+    def test_combiner_preserves_combined_noise_floor(self, tmp_path):
+        sub_path = tmp_path / "sub_combiner_nf.json"
+        scene = {
+            "version": "1",
+            "metadata": {},
+            "blocks": [
+                {"block_type": "HierInputPin", "block_id": "in0", "pin_name": "IN0", "label": "IN0"},
+                {"block_type": "HierInputPin", "block_id": "in1", "pin_name": "IN1", "label": "IN1"},
+                {"block_type": "PowerCombiner", "block_id": "cmb", "n_ways": 2, "label": "2-way Combiner"},
+                {"block_type": "HierOutputPin", "block_id": "out1", "pin_name": "OUT", "label": "OUT"},
+            ],
+            "connections": [
+                {"src_block_id": "in0", "src_port": "IN0", "dst_block_id": "cmb", "dst_port": "IN0"},
+                {"src_block_id": "in1", "src_port": "IN1", "dst_block_id": "cmb", "dst_port": "IN1"},
+                {"src_block_id": "cmb", "src_port": "OUT", "dst_block_id": "out1", "dst_port": "OUT"},
+            ],
+            "annotations": [],
+        }
+        sub_path.write_text(json.dumps(scene), encoding="utf-8")
+
+        block = HierSubcircuit(subcircuit_path=str(sub_path))
+        s0 = make_signal(fc=1.0e9, pwr=0.0)
+        s1 = make_signal(fc=2.0e9, pwr=0.0)
+        s0.set_noise_floor_dbm(-100.0)
+        s1.set_noise_floor_dbm(-100.0)
+
+        assert block.process(s0, "IN0") == {}
+        out = block.process(s1, "IN1")
+        assert "OUT" in out
+        assert out["OUT"].get_noise_floor_dbm() == pytest.approx(-100.0, abs=1e-6)
+
 
 class TestHierSubcircuitAnalysisFlattening:
     def test_flattens_internal_chain_for_analysis(self, tmp_path):

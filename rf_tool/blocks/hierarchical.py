@@ -280,7 +280,7 @@ def analysis_blocks_from_subcircuit(
     active_paths.add(resolved_path)
 
     try:
-        from rf_tool.blocks.components import block_from_dict
+        from rf_tool.blocks.components import block_from_dict, PowerCombiner
 
         with open(subcircuit_path, "r", encoding="utf-8") as fh:
             data = json.load(fh)
@@ -509,14 +509,16 @@ class HierSubcircuit(RFBlock):
                     result = {p.name: merged_in.copy() for p in dst_block.output_ports}
                 else:
                     result = dst_block.process(merged_in, dst_port)
-                    for out_sig in result.values():
-                        in_noise_floor = merged_in.get_noise_floor_dbm()
-                        if in_noise_floor is not None:
-                            effective_gain = out_sig.total_power_dbm() - merged_in.total_power_dbm()
-                            out_noise_floor = in_noise_floor + effective_gain + max(0.0, dst_block.nf_db)
-                            out_sig.set_noise_floor_dbm(out_noise_floor)
-                        elif merged_in.snr_db is not None and out_sig.snr_db is None:
-                            out_sig.snr_db = merged_in.snr_db - max(0.0, dst_block.nf_db)
+                    apply_generic_nf = not isinstance(dst_block, PowerCombiner)
+                    if apply_generic_nf:
+                        for out_sig in result.values():
+                            in_noise_floor = merged_in.get_noise_floor_dbm()
+                            if in_noise_floor is not None:
+                                effective_gain = out_sig.total_power_dbm() - merged_in.total_power_dbm()
+                                out_noise_floor = in_noise_floor + effective_gain + max(0.0, dst_block.nf_db)
+                                out_sig.set_noise_floor_dbm(out_noise_floor)
+                            elif merged_in.snr_db is not None and out_sig.snr_db is None:
+                                out_sig.snr_db = merged_in.snr_db - max(0.0, dst_block.nf_db)
                 for out_port, out_sig in result.items():
                     prev_out = signals_at.setdefault(dst_bid, {}).get(out_port)
                     if _signals_equivalent(prev_out, out_sig):
