@@ -30,7 +30,7 @@ from rf_tool.blocks.components import (
     LowPassFilter, HighPassFilter, PowerSplitter, PowerCombiner, Switch, Source, Sink,
     BLOCK_REGISTRY, block_from_dict,
 )
-from rf_tool.blocks.hierarchical import HierSubcircuit
+from rf_tool.blocks.hierarchical import HierSubcircuit, analysis_blocks_from_subcircuit
 
 
 # ======================================================================= #
@@ -841,3 +841,70 @@ class TestHierSubcircuitSimulation:
         assert "IF" in out
         assert out["IF"].carrier_frequency == pytest.approx(100e6, rel=1e-9)
         assert out["IF"].power_dbm == pytest.approx(-17.0, abs=1e-6)
+
+
+class TestHierSubcircuitAnalysisFlattening:
+    def test_flattens_internal_chain_for_analysis(self, tmp_path):
+        sub_path = tmp_path / "sub_chain.json"
+        scene = {
+            "version": "1",
+            "metadata": {},
+            "blocks": [
+                {"block_type": "HierInputPin", "block_id": "in1", "pin_name": "IN", "label": "IN"},
+                {"block_type": "Amplifier", "block_id": "amp1", "gain_db": 12.0, "nf_db": 2.0, "label": "A1"},
+                {"block_type": "Attenuator", "block_id": "att1", "attenuation_db": 3.0, "label": "AT1"},
+                {"block_type": "HierOutputPin", "block_id": "out1", "pin_name": "OUT", "label": "OUT"},
+            ],
+            "connections": [
+                {"src_block_id": "in1", "src_port": "IN", "dst_block_id": "amp1", "dst_port": "IN"},
+                {"src_block_id": "amp1", "src_port": "OUT", "dst_block_id": "att1", "dst_port": "IN"},
+                {"src_block_id": "att1", "src_port": "OUT", "dst_block_id": "out1", "dst_port": "OUT"},
+            ],
+            "annotations": [],
+        }
+        sub_path.write_text(json.dumps(scene), encoding="utf-8")
+
+        blocks = analysis_blocks_from_subcircuit(str(sub_path))
+        assert [b.BLOCK_TYPE for b in blocks] == ["Amplifier", "Attenuator"]
+        assert [b.label for b in blocks] == ["A1", "AT1"]
+
+    def test_flattens_nested_subcircuits_for_analysis(self, tmp_path):
+        child_path = tmp_path / "child.json"
+        child_scene = {
+            "version": "1",
+            "metadata": {},
+            "blocks": [
+                {"block_type": "HierInputPin", "block_id": "cin", "pin_name": "IN", "label": "IN"},
+                {"block_type": "Amplifier", "block_id": "camp", "gain_db": 10.0, "label": "ChildAmp"},
+                {"block_type": "HierOutputPin", "block_id": "cout", "pin_name": "OUT", "label": "OUT"},
+            ],
+            "connections": [
+                {"src_block_id": "cin", "src_port": "IN", "dst_block_id": "camp", "dst_port": "IN"},
+                {"src_block_id": "camp", "src_port": "OUT", "dst_block_id": "cout", "dst_port": "OUT"},
+            ],
+            "annotations": [],
+        }
+        child_path.write_text(json.dumps(child_scene), encoding="utf-8")
+
+        parent_path = tmp_path / "parent.json"
+        parent_scene = {
+            "version": "1",
+            "metadata": {},
+            "blocks": [
+                {"block_type": "HierInputPin", "block_id": "pin", "pin_name": "IN", "label": "IN"},
+                {"block_type": "HierSubcircuit", "block_id": "sub1", "subcircuit_path": "child.json", "label": "Sub"},
+                {"block_type": "Attenuator", "block_id": "patt", "attenuation_db": 2.0, "label": "ParentAtt"},
+                {"block_type": "HierOutputPin", "block_id": "pout", "pin_name": "OUT", "label": "OUT"},
+            ],
+            "connections": [
+                {"src_block_id": "pin", "src_port": "IN", "dst_block_id": "sub1", "dst_port": "IN"},
+                {"src_block_id": "sub1", "src_port": "OUT", "dst_block_id": "patt", "dst_port": "IN"},
+                {"src_block_id": "patt", "src_port": "OUT", "dst_block_id": "pout", "dst_port": "OUT"},
+            ],
+            "annotations": [],
+        }
+        parent_path.write_text(json.dumps(parent_scene), encoding="utf-8")
+
+        blocks = analysis_blocks_from_subcircuit(str(parent_path))
+        assert [b.BLOCK_TYPE for b in blocks] == ["Amplifier", "Attenuator"]
+        assert [b.label for b in blocks] == ["ChildAmp", "ParentAtt"]

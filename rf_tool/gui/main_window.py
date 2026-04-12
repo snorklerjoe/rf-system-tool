@@ -30,7 +30,12 @@ from rf_tool.blocks.components import (
     LowPassFilter, HighPassFilter, PowerSplitter, PowerCombiner, Switch, Source, Sink,
     block_from_dict,
 )
-from rf_tool.blocks.hierarchical import HierInputPin, HierOutputPin, HierSubcircuit
+from rf_tool.blocks.hierarchical import (
+    HierInputPin,
+    HierOutputPin,
+    HierSubcircuit,
+    analysis_blocks_from_subcircuit,
+)
 from rf_tool.models.rf_block import RFBlock
 from rf_tool.engine.cascade import compute_cascade_metrics
 from rf_tool.serialization.json_io import save_scene, load_scene
@@ -820,6 +825,9 @@ class MainWindow(QMainWindow):
         out: List[RFBlock] = []
         for b in blocks:
             if b.comment_mode == "out":
+                continue
+            if isinstance(b, HierSubcircuit):
+                out.extend(self._effective_blocks(analysis_blocks_from_subcircuit(b.subcircuit_path)))
                 continue
             if b.comment_mode == "through":
                 b_passthrough = copy.deepcopy(b)

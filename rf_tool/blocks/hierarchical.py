@@ -11,7 +11,8 @@ from __future__ import annotations
 import json
 import math
 import os
-from typing import Dict, List, Optional, Any, Tuple
+from collections import deque
+from typing import Dict, List, Optional, Any, Tuple, Set
 
 from rf_tool.models.rf_block import RFBlock, Port
 from rf_tool.models.signal import Signal
@@ -240,6 +241,121 @@ def _resolve_subcircuit_path(path: str, base_dir: str) -> str:
     if os.path.isabs(path):
         return path
     return os.path.normpath(os.path.join(base_dir, path))
+
+
+def _reachable_from(starts: Set[str], adjacency: Dict[str, Set[str]]) -> Set[str]:
+    """Return all nodes reachable from *starts* in a directed graph."""
+    seen: Set[str] = set(starts)
+    queue = deque(starts)
+    while queue:
+        node = queue.popleft()
+        for nxt in adjacency.get(node, set()):
+            if nxt in seen:
+                continue
+            seen.add(nxt)
+            queue.append(nxt)
+    return seen
+
+
+def analysis_blocks_from_subcircuit(
+    subcircuit_path: str,
+    _active_paths: Optional[List[str]] = None,
+) -> List[RFBlock]:
+    """
+    Return internal blocks that participate in an IN→OUT path for analysis.
+
+    The returned blocks exclude HierInputPin/HierOutputPin wrappers and flatten
+    nested HierSubcircuit blocks recursively.
+    """
+    if not subcircuit_path or not os.path.isfile(subcircuit_path):
+        return []
+
+    resolved_path = os.path.abspath(subcircuit_path)
+    active_paths = _active_paths or []
+    if resolved_path in active_paths:
+        return []
+
+    active_paths.append(resolved_path)
+    try:
+        from rf_tool.blocks.components import block_from_dict
+
+        with open(subcircuit_path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        base_dir = os.path.dirname(resolved_path)
+
+        blocks: Dict[str, RFBlock] = {}
+        input_ids: Set[str] = set()
+        output_ids: Set[str] = set()
+        block_order: Dict[str, int] = {}
+        for idx, block_dict in enumerate(data.get("blocks", [])):
+            block = block_from_dict(block_dict)
+            if isinstance(block, HierSubcircuit):
+                block.subcircuit_path = _resolve_subcircuit_path(block.subcircuit_path, base_dir)
+                block.reload()
+            blocks[block.block_id] = block
+            block_order[block.block_id] = idx
+            if isinstance(block, HierInputPin):
+                input_ids.add(block.block_id)
+            elif isinstance(block, HierOutputPin):
+                output_ids.add(block.block_id)
+
+        connections = data.get("connections", [])
+        adjacency: Dict[str, Set[str]] = {}
+        reverse_adjacency: Dict[str, Set[str]] = {}
+        for conn in connections:
+            src_id = conn.get("src_block_id")
+            dst_id = conn.get("dst_block_id")
+            if src_id not in blocks or dst_id not in blocks:
+                continue
+            adjacency.setdefault(src_id, set()).add(dst_id)
+            reverse_adjacency.setdefault(dst_id, set()).add(src_id)
+
+        if not input_ids or not output_ids:
+            return []
+
+        forward = _reachable_from(input_ids, adjacency)
+        backward = _reachable_from(output_ids, reverse_adjacency)
+        path_ids = (forward & backward) - input_ids - output_ids
+        if not path_ids:
+            return []
+
+        indegree: Dict[str, int] = {bid: 0 for bid in path_ids}
+        for src_id in path_ids:
+            for dst_id in adjacency.get(src_id, set()):
+                if dst_id in path_ids:
+                    indegree[dst_id] += 1
+        queue = deque(sorted((bid for bid, deg in indegree.items() if deg == 0), key=lambda bid: block_order.get(bid, 0)))
+        ordered_ids: List[str] = []
+        seen: Set[str] = set()
+        while queue:
+            bid = queue.popleft()
+            if bid in seen:
+                continue
+            seen.add(bid)
+            ordered_ids.append(bid)
+            for dst_id in sorted(adjacency.get(bid, set()), key=lambda x: block_order.get(x, 0)):
+                if dst_id not in indegree:
+                    continue
+                indegree[dst_id] -= 1
+                if indegree[dst_id] == 0:
+                    queue.append(dst_id)
+
+        if len(ordered_ids) < len(path_ids):
+            remaining = sorted(path_ids - set(ordered_ids), key=lambda bid: block_order.get(bid, 0))
+            ordered_ids.extend(remaining)
+
+        expanded: List[RFBlock] = []
+        for bid in ordered_ids:
+            block = blocks[bid]
+            if isinstance(block, HierSubcircuit):
+                expanded.extend(analysis_blocks_from_subcircuit(block.subcircuit_path, active_paths))
+            else:
+                expanded.append(block)
+        return expanded
+    except Exception:
+        return []
+    finally:
+        active_paths.pop()
 
 
 class HierSubcircuit(RFBlock):
