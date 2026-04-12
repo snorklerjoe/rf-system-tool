@@ -564,11 +564,11 @@ class TestPowerCombiner:
         c = PowerCombiner(n_ways=3)
         s1 = make_signal(fc=1.0e9, pwr=0.0)
         s2 = make_signal(fc=1.2e9, pwr=0.0)
-        out_two = c.process(s1, "IN0")["OUT"]
+        c.process(s1, "IN0")
         out_two = c.process(s2, "IN1")["OUT"]
         c.reset_runtime_state()
-        out_three = c.process(s1, "IN0")["OUT"]
-        out_three = c.process(s2, "IN1")["OUT"]
+        c.process(s1, "IN0")
+        c.process(s2, "IN1")
         out_three = c.process(make_signal(fc=1.4e9, pwr=0.0), "IN2")["OUT"]
         delta_db = out_three.total_power_dbm() - out_two.total_power_dbm()
         assert delta_db == pytest.approx(10.0 * math.log10(3.0 / 2.0), abs=1e-6)

@@ -358,6 +358,11 @@ class ActualSpectrumPlot(QWidget):
         self._all_signals_with_labels = list(signals_with_labels)
         self._render_multi_signals()
 
+    def set_header(self, header_text: str, title_text: str) -> None:
+        """Set header label and plot title without exposing internals."""
+        self._wire_label.setText(header_text)
+        self._plot_widget.setTitle(title_text)
+
     def _render_multi_signals(self) -> None:
         """
         Overlay multiple signals on the same plot with distinct colours.

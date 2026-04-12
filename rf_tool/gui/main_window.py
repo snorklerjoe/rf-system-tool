@@ -688,8 +688,7 @@ class MainWindow(QMainWindow):
                 overlays.append((f"{s_lbl}:{s_port} → {d_lbl}:{d_port}", sig))
             if overlays:
                 self._spectrum_plot.set_multi_signals(overlays)
-                self._spectrum_plot._wire_label.setText("Multi-wire selection")
-                self._spectrum_plot._plot_widget.setTitle("Signal Spectrum — Multiple Wires")
+                self._spectrum_plot.set_header("Multi-wire selection", "Signal Spectrum — Multiple Wires")
         else:
             if dst_bid not in signals_at or dst_port not in signals_at[dst_bid]:
                 return
@@ -733,8 +732,7 @@ class MainWindow(QMainWindow):
             self._spectrum_plot.setAttribute(Qt.WA_DeleteOnClose, False)
 
         self._spectrum_plot.set_multi_signals(signals_with_labels)
-        self._spectrum_plot._wire_label.setText("Multi-node selection")
-        self._spectrum_plot._plot_widget.setTitle("Signal Spectrum — Multiple Nodes")
+        self._spectrum_plot.set_header("Multi-node selection", "Signal Spectrum — Multiple Nodes")
         self._spectrum_plot.show()
         self._spectrum_plot.raise_()
         self._spectrum_plot.activateWindow()

@@ -10,7 +10,7 @@ Each class inherits from RFBlock and overrides:
 from __future__ import annotations
 
 import math
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Set
 
 import numpy as np
 
@@ -599,7 +599,7 @@ class PowerSplitter(RFBlock):
                 return {}
 
             tone_bins: List[Tuple[float, float]] = []
-            constructive_freqs: set[float] = set()
+            constructive_freqs: Set[float] = set()
 
             def _accumulate_tone(freq_hz: float, power_dbm: float) -> None:
                 power_mw = 10.0 ** (power_dbm / 10.0)
