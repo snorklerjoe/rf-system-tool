@@ -17,7 +17,7 @@ import numpy as np
 from rf_tool.models.rf_block import RFBlock, Port
 from rf_tool.models.signal import Signal, SpurTone
 
-_FREQUENCY_TOLERANCE_HZ = 1e-3
+_FREQUENCY_BIN_SIZE_HZ = 1e-3
 
 
 # ======================================================================= #
@@ -605,10 +605,11 @@ class PowerSplitter(RFBlock):
 
             def _accumulate_tone(freq_hz: float, power_dbm: float) -> None:
                 power_mw = 10.0 ** (power_dbm / 10.0)
-                key = int(round(freq_hz / _FREQUENCY_TOLERANCE_HZ))
+                key = int(round(freq_hz / _FREQUENCY_BIN_SIZE_HZ))
                 existing = tone_bins.get(key)
                 if existing is not None:
                     f_hz, p_mw = existing
+                    # Keep the first-seen representative frequency for this bin.
                     constructive_freqs.add(f_hz)
                     tone_bins[key] = (f_hz, p_mw + power_mw)
                     return

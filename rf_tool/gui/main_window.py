@@ -610,7 +610,7 @@ class MainWindow(QMainWindow):
     # Propagate signals                                                    #
     # ------------------------------------------------------------------ #
     def _propagate_signals(self) -> None:
-        self._append_runtime_message("starting signal propagation...")
+        self._append_runtime_message("starting signal propagation.")
         signals = self._scene.propagate_signals(self._append_runtime_message)
         n_blocks = len(signals)
         self._update_metrics_panel()
