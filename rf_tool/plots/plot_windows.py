@@ -44,6 +44,11 @@ _NOISE_COLOR = (80, 80, 80)       # dark grey for noise trace
 _NOISE_FLOOR_LINE_COLOR = (140, 140, 140)  # slightly brighter for the reference line
 
 
+def _format_freq_label_hz(freq_hz: float, tooltip: str = "") -> str:
+    """Return a safe frequency label for tooltips."""
+    return tooltip if tooltip else f"{freq_hz:.2e} Hz"
+
+
 def _draw_noise_floor(plot_widget: pg.PlotWidget,
                       noise_floor_dbm: float,
                       x_min: float, x_max: float) -> None:
@@ -250,7 +255,7 @@ class SpectrumPlot(QWidget):
             size=6, brush=pg.mkBrush(color), pen=pg.mkPen(color),
             hoverable=True, hoverSize=8,
         )
-        dot.setToolTip(f"{name}: {power_dbm:.1f} dBm @ {tooltip if tooltip else freq:.2e} Hz")
+        dot.setToolTip(f"{name}: {power_dbm:.1f} dBm @ {_format_freq_label_hz(freq, tooltip)}")
         self._plot_widget.addItem(dot)
 
 
@@ -552,7 +557,7 @@ class ActualSpectrumPlot(QWidget):
             size=dot_size, brush=pg.mkBrush(color), pen=pg.mkPen(color),
             hoverable=True, hoverSize=dot_size + 3,
         )
-        dot.setToolTip(f"{name}: {power_dbm:.1f} dBm @ {tooltip if tooltip else freq:.2e} Hz")
+        dot.setToolTip(f"{name}: {power_dbm:.1f} dBm @ {_format_freq_label_hz(freq, tooltip)}")
         self._plot_widget.addItem(dot)
 # ======================================================================= #
 # Frequency Response View - with Source/Sink Selection                    #

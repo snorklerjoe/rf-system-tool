@@ -502,8 +502,19 @@ class RFScene(QGraphicsScene):
                 sig = item.block.generate()
                 signals_at.setdefault(bid, {})[item.block.output_ports[0].name] = sig
                 queue.append((bid, item.block.output_ports[0].name, sig))
+                if message_callback is not None:
+                    message_callback(
+                        f"source {item.block.label}: {sig.carrier_frequency/1e9:.6g} GHz @ {sig.power_dbm:.2f} dBm",
+                        "info",
+                    )
             else:
                 item.set_power_warning("ok")
+
+        if message_callback is not None:
+            message_callback(
+                f"propagation seeded with {len(queue)} source signal(s) across {len(self._connections)} connection(s).",
+                "info",
+            )
 
         # Event-based propagation
         max_iterations = max(MIN_PROPAGATION_ITERATIONS, len(self._connections) * ITERATIONS_PER_CONNECTION)
@@ -526,6 +537,12 @@ class RFScene(QGraphicsScene):
                 # Power warning
                 status = dst_item.block.check_power(merged_in.total_power_dbm())
                 dst_item.set_power_warning(status)
+                if message_callback is not None and status in {"low", "high"}:
+                    level = "warning" if status == "high" else "info"
+                    message_callback(
+                        f"{dst_item.block.label} input power status: {status} at {merged_in.total_power_dbm():.2f} dBm.",
+                        level,
+                    )
 
                 if self._signals_equivalent(prev_in, merged_in):
                     continue
@@ -548,6 +565,14 @@ class RFScene(QGraphicsScene):
                             out_sig.set_noise_floor_dbm(out_noise_floor)
                         elif merged_in.snr_db is not None and out_sig.snr_db is None:
                             out_sig.snr_db = merged_in.snr_db - max(0.0, dst_item.block.nf_db)
+                    if message_callback is not None:
+                        for out_port, out_sig in result.items():
+                            n_tones = 1 + len(out_sig.spurs)
+                            message_callback(
+                                f"{dst_item.block.label}:{out_port} updated with {n_tones} tone(s); "
+                                f"carrier {out_sig.carrier_frequency/1e9:.6g} GHz @ {out_sig.power_dbm:.2f} dBm.",
+                                "info",
+                            )
 
                 for out_port, out_sig in result.items():
                     prev_out = signals_at.setdefault(dst_bid, {}).get(out_port)
@@ -577,6 +602,15 @@ class RFScene(QGraphicsScene):
                         color = QColor("#FFD75E")
             text = f"{pwr:.2f} dBm" if math.isfinite(pwr) else "-∞ dBm"
             w.set_power_label(text, color)
+
+        if iterations > max_iterations:
+            if message_callback is not None:
+                message_callback(
+                    "propagation reached iteration cap before convergence; results may be partial.",
+                    "warning",
+                )
+        elif message_callback is not None:
+            message_callback(f"propagation converged in {iterations} iteration(s).", "info")
 
         return signals_at
 

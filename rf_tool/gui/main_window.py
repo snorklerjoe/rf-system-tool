@@ -670,7 +670,8 @@ class MainWindow(QMainWindow):
 
     def _on_wire_selected(self, src_bid: str, src_port: str, dst_bid: str, dst_port: str) -> None:
         """Handle wire selection - show its spectrum in the persistent viewer."""
-        signals_at = self._scene.propagate_signals()
+        self._append_runtime_message("refreshing propagation for selected wire(s).")
+        signals_at = self._scene.propagate_signals(self._append_runtime_message)
         selected_wires = self._scene.get_selected_wires()
         if self._spectrum_plot is None:
             self._spectrum_plot = ActualSpectrumPlot(None)
@@ -694,6 +695,9 @@ class MainWindow(QMainWindow):
             if overlays:
                 self._spectrum_plot.set_multi_signals(overlays)
                 self._spectrum_plot.set_header("Multi-wire selection", "Signal Spectrum — Multiple Wires")
+                self._append_runtime_message(
+                    f"displaying {len(overlays)} selected wire spectrum trace(s)."
+                )
         else:
             if dst_bid not in signals_at or dst_port not in signals_at[dst_bid]:
                 return
@@ -703,13 +707,18 @@ class MainWindow(QMainWindow):
             src_label = src_item.block.label if src_item else "Source"
             dst_label = dst_item.block.label if dst_item else "Dest"
             self._spectrum_plot.set_signal_from_wire(signal, src_label, dst_label, dst_port)
+            self._append_runtime_message(
+                f"displaying wire spectrum {src_label}:{src_port} → {dst_label}:{dst_port} "
+                f"with {1 + len(signal.spurs)} tone(s)."
+            )
         self._spectrum_plot.show()
         self._spectrum_plot.raise_()
         self._spectrum_plot.activateWindow()
 
     def _on_blocks_selected(self, block_ids: list) -> None:
         """Handle multi-block selection - overlay all output signals in the spectrum viewer."""
-        signals_at = self._scene.propagate_signals()
+        self._append_runtime_message("refreshing propagation for selected block(s).")
+        signals_at = self._scene.propagate_signals(self._append_runtime_message)
 
         signals_with_labels = []
         for bid in block_ids:
@@ -738,6 +747,9 @@ class MainWindow(QMainWindow):
 
         self._spectrum_plot.set_multi_signals(signals_with_labels)
         self._spectrum_plot.set_header("Multi-node selection", "Signal Spectrum — Multiple Nodes")
+        self._append_runtime_message(
+            f"displaying {sum(1 for _, sig in signals_with_labels if sig is not None)} block output trace(s)."
+        )
         self._spectrum_plot.show()
         self._spectrum_plot.raise_()
         self._spectrum_plot.activateWindow()
