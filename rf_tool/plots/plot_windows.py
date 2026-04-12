@@ -83,25 +83,21 @@ class SpectrumPlot(QWidget):
         self.resize(900, 500)
         layout = QVBoxLayout(self)
 
-        # Toolbar row: zoom-to-fit and frequency range controls
+        # Toolbar row: frequency range controls
         btn_row = QHBoxLayout()
-        zoom_btn = QPushButton("⛶ Zoom to Fit")
-        zoom_btn.setToolTip("Auto-scale axes to fit all data")
-        zoom_btn.clicked.connect(self._zoom_to_fit)
-        btn_row.addWidget(zoom_btn)
-        btn_row.addWidget(QLabel("Start (Hz):"))
+        btn_row.addWidget(QLabel("Start (GHz):"))
         self._start_freq = QDoubleSpinBox()
-        self._start_freq.setDecimals(3)
-        self._start_freq.setRange(-1e15, 1e15)
-        self._start_freq.setSingleStep(1e6)
-        self._start_freq.editingFinished.connect(self._apply_manual_range)
+        self._start_freq.setDecimals(6)
+        self._start_freq.setRange(-1e6, 1e6)
+        self._start_freq.setSingleStep(0.001)
+        self._start_freq.valueChanged.connect(self._apply_manual_range)
         btn_row.addWidget(self._start_freq)
-        btn_row.addWidget(QLabel("Stop (Hz):"))
+        btn_row.addWidget(QLabel("Stop (GHz):"))
         self._stop_freq = QDoubleSpinBox()
-        self._stop_freq.setDecimals(3)
-        self._stop_freq.setRange(-1e15, 1e15)
-        self._stop_freq.setSingleStep(1e6)
-        self._stop_freq.editingFinished.connect(self._apply_manual_range)
+        self._stop_freq.setDecimals(6)
+        self._stop_freq.setRange(-1e6, 1e6)
+        self._stop_freq.setSingleStep(0.001)
+        self._stop_freq.valueChanged.connect(self._apply_manual_range)
         btn_row.addWidget(self._stop_freq)
         btn_row.addStretch()
         layout.addLayout(btn_row)
@@ -121,16 +117,15 @@ class SpectrumPlot(QWidget):
         self._y_min = None
         self._full_x_range: Optional[Tuple[float, float]] = None
 
-    def _zoom_to_fit(self) -> None:
-        if self._full_x_range is None:
-            self._plot_widget.autoRange()
-            return
-        x_min, x_max = self._full_x_range
-        self._start_freq.setValue(x_min)
-        self._stop_freq.setValue(x_max)
-        self.set_signal(self._current_signal)
+    def _set_range_controls_ghz(self, start_hz: float, stop_hz: float) -> None:
+        self._start_freq.blockSignals(True)
+        self._stop_freq.blockSignals(True)
+        self._start_freq.setValue(start_hz / 1e9)
+        self._stop_freq.setValue(stop_hz / 1e9)
+        self._start_freq.blockSignals(False)
+        self._stop_freq.blockSignals(False)
 
-    def _apply_manual_range(self) -> None:
+    def _apply_manual_range(self, *_args) -> None:
         if self._current_signal is not None:
             self.set_signal(self._current_signal)
 
@@ -153,12 +148,11 @@ class SpectrumPlot(QWidget):
         self._full_x_range = (min(all_freqs), max(all_freqs))
         noise_floor = signal.get_noise_floor_dbm()
 
-        start_hz = self._start_freq.value()
-        stop_hz = self._stop_freq.value()
+        start_hz = self._start_freq.value() * 1e9
+        stop_hz = self._stop_freq.value() * 1e9
         if stop_hz <= start_hz and self._full_x_range is not None:
             start_hz, stop_hz = self._full_x_range
-            self._start_freq.setValue(start_hz)
-            self._stop_freq.setValue(stop_hz)
+            self._set_range_controls_ghz(start_hz, stop_hz)
 
         in_range_components: List[Tuple[float, float, str]] = []
         if start_hz <= fc <= stop_hz:
@@ -272,29 +266,25 @@ class ActualSpectrumPlot(QWidget):
         self.resize(900, 500)
         layout = QVBoxLayout(self)
 
-        # Top bar: wire/node label + zoom-to-fit + range controls
+        # Top bar: wire/node label + range controls
         info_layout = QHBoxLayout()
         self._wire_label = QLabel("Click on a wire to show its spectrum")
         self._wire_label.setStyleSheet("color: #AABBDD; font-weight: bold;")
         info_layout.addWidget(self._wire_label)
         info_layout.addStretch()
-        zoom_btn = QPushButton("⛶ Zoom to Fit")
-        zoom_btn.setToolTip("Auto-scale axes to fit all data")
-        zoom_btn.clicked.connect(self._zoom_to_fit)
-        info_layout.addWidget(zoom_btn)
-        info_layout.addWidget(QLabel("Start (Hz):"))
+        info_layout.addWidget(QLabel("Start (GHz):"))
         self._start_freq = QDoubleSpinBox()
-        self._start_freq.setDecimals(3)
-        self._start_freq.setRange(-1e15, 1e15)
-        self._start_freq.setSingleStep(1e6)
-        self._start_freq.editingFinished.connect(self._apply_manual_range)
+        self._start_freq.setDecimals(6)
+        self._start_freq.setRange(-1e6, 1e6)
+        self._start_freq.setSingleStep(0.001)
+        self._start_freq.valueChanged.connect(self._apply_manual_range)
         info_layout.addWidget(self._start_freq)
-        info_layout.addWidget(QLabel("Stop (Hz):"))
+        info_layout.addWidget(QLabel("Stop (GHz):"))
         self._stop_freq = QDoubleSpinBox()
-        self._stop_freq.setDecimals(3)
-        self._stop_freq.setRange(-1e15, 1e15)
-        self._stop_freq.setSingleStep(1e6)
-        self._stop_freq.editingFinished.connect(self._apply_manual_range)
+        self._stop_freq.setDecimals(6)
+        self._stop_freq.setRange(-1e6, 1e6)
+        self._stop_freq.setSingleStep(0.001)
+        self._stop_freq.valueChanged.connect(self._apply_manual_range)
         info_layout.addWidget(self._stop_freq)
         layout.addLayout(info_layout)
 
@@ -318,16 +308,15 @@ class ActualSpectrumPlot(QWidget):
         self._full_x_range: Optional[Tuple[float, float]] = None
         self._y_min = None
 
-    def _zoom_to_fit(self) -> None:
-        if self._full_x_range is None:
-            self._plot_widget.autoRange()
-            return
-        x_min, x_max = self._full_x_range
-        self._start_freq.setValue(x_min)
-        self._stop_freq.setValue(x_max)
-        self._render_multi_signals()
+    def _set_range_controls_ghz(self, start_hz: float, stop_hz: float) -> None:
+        self._start_freq.blockSignals(True)
+        self._stop_freq.blockSignals(True)
+        self._start_freq.setValue(start_hz / 1e9)
+        self._stop_freq.setValue(stop_hz / 1e9)
+        self._start_freq.blockSignals(False)
+        self._stop_freq.blockSignals(False)
 
-    def _apply_manual_range(self) -> None:
+    def _apply_manual_range(self, *_args) -> None:
         self._render_multi_signals()
 
     def set_signal_from_wire(self, signal, src_block_label: str = "",
@@ -387,12 +376,11 @@ class ActualSpectrumPlot(QWidget):
             all_freqs.extend(s.frequency for s in sig.spurs)
         self._full_x_range = (min(all_freqs), max(all_freqs))
 
-        start_hz = self._start_freq.value()
-        stop_hz = self._stop_freq.value()
+        start_hz = self._start_freq.value() * 1e9
+        stop_hz = self._stop_freq.value() * 1e9
         if stop_hz <= start_hz and self._full_x_range is not None:
             start_hz, stop_hz = self._full_x_range
-            self._start_freq.setValue(start_hz)
-            self._stop_freq.setValue(stop_hz)
+            self._set_range_controls_ghz(start_hz, stop_hz)
 
         # ---- Determine axis ranges across all displayed signals ----
         all_powers: List[float] = []
