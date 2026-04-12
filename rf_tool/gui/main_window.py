@@ -605,12 +605,12 @@ class MainWindow(QMainWindow):
     # Propagate signals                                                    #
     # ------------------------------------------------------------------ #
     def _propagate_signals(self) -> None:
-        self._append_runtime_message("Starting signal propagation...")
+        self._append_runtime_message("starting signal propagation...")
         signals = self._scene.propagate_signals(self._append_runtime_message)
         n_blocks = len(signals)
         self._update_metrics_panel()
         self._status.showMessage(f"Propagated signals through {n_blocks} blocks")
-        self._append_runtime_message(f"Propagation complete across {n_blocks} blocks.")
+        self._append_runtime_message(f"propagation complete across {n_blocks} blocks.")
 
         # If a sink is selected and has a signal, show spectrum
         selected = self._scene.selectedItems()
