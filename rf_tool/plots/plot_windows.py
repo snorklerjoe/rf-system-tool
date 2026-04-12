@@ -45,7 +45,7 @@ _NOISE_FLOOR_LINE_COLOR = (140, 140, 140)  # slightly brighter for the reference
 
 
 def _format_freq_label_hz(freq: float, tooltip: str = "") -> str:
-    """Return tooltip label text with a numeric fallback to avoid format/type errors."""
+    """Return tooltip text, or scientific-notation Hz text when tooltip is empty."""
     return tooltip if tooltip else f"{freq:.2e} Hz"
 
 

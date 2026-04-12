@@ -34,6 +34,13 @@ MIN_PROPAGATION_ITERATIONS = 1000
 ITERATIONS_PER_CONNECTION = 40
 
 
+def _pluralized(count: int, singular: str, plural: Optional[str] = None) -> str:
+    """Return singular/plural form based on *count*."""
+    if count == 1:
+        return singular
+    return plural if plural is not None else f"{singular}s"
+
+
 # ======================================================================= #
 # Wire item                                                                #
 # ======================================================================= #
@@ -511,11 +518,9 @@ class RFScene(QGraphicsScene):
                 item.set_power_warning("ok")
 
         if message_callback is not None:
-            signal_word = "signal" if len(queue) == 1 else "signals"
-            connection_word = "connection" if len(self._connections) == 1 else "connections"
             message_callback(
-                f"propagation seeded with {len(queue)} source {signal_word} across "
-                f"{len(self._connections)} {connection_word}.",
+                f"propagation seeded with {len(queue)} source {_pluralized(len(queue), 'signal')} across "
+                f"{len(self._connections)} {_pluralized(len(self._connections), 'connection')}.",
                 "info",
             )
 
@@ -571,9 +576,9 @@ class RFScene(QGraphicsScene):
                     if message_callback is not None:
                         for out_port, out_sig in result.items():
                             n_tones = 1 + len(out_sig.spurs)
-                            tone_word = "tone" if n_tones == 1 else "tones"
                             message_callback(
-                                f"{dst_item.block.label}:{out_port} updated with {n_tones} {tone_word}; "
+                                f"{dst_item.block.label}:{out_port} updated with "
+                                f"{n_tones} {_pluralized(n_tones, 'tone')}; "
                                 f"carrier {out_sig.carrier_frequency/1e9:.6g} GHz @ {out_sig.power_dbm:.2f} dBm.",
                                 "info",
                             )
