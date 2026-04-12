@@ -341,7 +341,12 @@ class MainWindow(QMainWindow):
         self._status.showMessage("Ready")
 
     def _append_runtime_message(self, message: str, level: str = "info") -> None:
-        color = "#E8C35E" if level == "warning" else "#D0D0D0"
+        level_colors = {
+            "info": "#D0D0D0",
+            "warning": "#E8C35E",
+            "error": "#FF6B6B",
+        }
+        color = level_colors.get(level, level_colors["info"])
         safe = (
             message.replace("&", "&amp;")
             .replace("<", "&lt;")

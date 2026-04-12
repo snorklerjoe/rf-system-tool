@@ -600,17 +600,19 @@ class PowerSplitter(RFBlock):
             if not self._combine_buffer:
                 return {}
 
-            tone_bins: List[Tuple[float, float]] = []
+            tone_bins: Dict[int, Tuple[float, float]] = {}
             constructive_freqs: Set[float] = set()
 
             def _accumulate_tone(freq_hz: float, power_dbm: float) -> None:
                 power_mw = 10.0 ** (power_dbm / 10.0)
-                for idx, (f_hz, p_mw) in enumerate(tone_bins):
-                    if abs(f_hz - freq_hz) < _FREQUENCY_TOLERANCE_HZ:
-                        constructive_freqs.add(f_hz)
-                        tone_bins[idx] = (f_hz, p_mw + power_mw)
-                        return
-                tone_bins.append((freq_hz, power_mw))
+                key = int(round(freq_hz / _FREQUENCY_TOLERANCE_HZ))
+                existing = tone_bins.get(key)
+                if existing is not None:
+                    f_hz, p_mw = existing
+                    constructive_freqs.add(f_hz)
+                    tone_bins[key] = (f_hz, p_mw + power_mw)
+                    return
+                tone_bins[key] = (freq_hz, power_mw)
 
             noise_terms_mw: List[float] = []
             total_signal_mw = 0.0
@@ -637,7 +639,7 @@ class PowerSplitter(RFBlock):
                 return {}
 
             combined_tones = sorted(
-                [(f_hz, 10.0 * math.log10(max(p_mw, 1e-300))) for f_hz, p_mw in tone_bins],
+                [(f_hz, 10.0 * math.log10(max(p_mw, 1e-300))) for f_hz, p_mw in tone_bins.values()],
                 key=lambda freq_power: freq_power[1],
                 reverse=True,
             )

@@ -359,7 +359,16 @@ class ActualSpectrumPlot(QWidget):
         self._render_multi_signals()
 
     def set_header(self, header_text: str, title_text: str) -> None:
-        """Set header label and plot title without exposing internals."""
+        """
+        Set header label and plot title.
+
+        Parameters
+        ----------
+        header_text : str
+            Text shown in the header label above the plot.
+        title_text : str
+            Title shown on the plot widget.
+        """
         self._wire_label.setText(header_text)
         self._plot_widget.setTitle(title_text)
 
