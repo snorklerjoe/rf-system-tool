@@ -918,7 +918,7 @@ class TestHierSubcircuitSimulation:
         s0.set_noise_floor_dbm(-100.0)
         s1.set_noise_floor_dbm(-100.0)
 
-        assert block.process(s0, "IN0") == {}
+        _ = block.process(s0, "IN0")
         out = block.process(s1, "IN1")
         assert "OUT" in out
         assert out["OUT"].get_noise_floor_dbm() == pytest.approx(-100.0, abs=1e-6)

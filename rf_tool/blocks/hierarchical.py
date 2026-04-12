@@ -280,7 +280,7 @@ def analysis_blocks_from_subcircuit(
     active_paths.add(resolved_path)
 
     try:
-        from rf_tool.blocks.components import block_from_dict, PowerCombiner
+        from rf_tool.blocks.components import block_from_dict
 
         with open(subcircuit_path, "r", encoding="utf-8") as fh:
             data = json.load(fh)
@@ -427,7 +427,7 @@ class HierSubcircuit(RFBlock):
 
     def _simulate_subcircuit(self) -> Dict[str, Signal]:
         """Run event-based propagation inside the referenced subcircuit scene."""
-        from rf_tool.blocks.components import block_from_dict
+        from rf_tool.blocks.components import block_from_dict, PowerCombiner
 
         with open(self.subcircuit_path, "r", encoding="utf-8") as fh:
             data = json.load(fh)
