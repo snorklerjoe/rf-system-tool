@@ -261,7 +261,7 @@ def _reachable_from(starts: Set[str], adjacency: Dict[str, Set[str]]) -> Set[str
 
 def analysis_blocks_from_subcircuit(
     subcircuit_path: str,
-    _active_paths: Optional[List[str]] = None,
+    _active_paths: Optional[Set[str]] = None,
 ) -> List[RFBlock]:
     """
     Return internal blocks that participate in an IN→OUT path for analysis.
@@ -273,11 +273,12 @@ def analysis_blocks_from_subcircuit(
         return []
 
     resolved_path = os.path.abspath(subcircuit_path)
-    active_paths = _active_paths if _active_paths is not None else []
+    active_paths = _active_paths if _active_paths is not None else set()
     if resolved_path in active_paths:
         return []
+    active_paths = set(active_paths)
+    active_paths.add(resolved_path)
 
-    active_paths.append(resolved_path)
     try:
         from rf_tool.blocks.components import block_from_dict
 
@@ -326,7 +327,9 @@ def analysis_blocks_from_subcircuit(
             for dst_id in adjacency.get(src_id, set()):
                 if dst_id in path_ids:
                     indegree[dst_id] += 1
-        queue = deque(sorted((bid for bid, deg in indegree.items() if deg == 0), key=lambda bid: block_order[bid]))
+        zero_indegree = [bid for bid, deg in indegree.items() if deg == 0]
+        zero_indegree.sort(key=lambda bid: block_order[bid])
+        queue = deque(zero_indegree)
         ordered_ids: List[str] = []
         seen: Set[str] = set()
         while queue:
@@ -357,8 +360,6 @@ def analysis_blocks_from_subcircuit(
     except (OSError, json.JSONDecodeError, ValueError, KeyError, TypeError) as exc:
         logger.warning("analysis_blocks_from_subcircuit failed for %s: %s", subcircuit_path, exc)
         return []
-    finally:
-        active_paths.pop()
 
 
 class HierSubcircuit(RFBlock):
