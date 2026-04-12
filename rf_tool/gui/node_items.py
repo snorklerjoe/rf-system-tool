@@ -640,22 +640,218 @@ class AnnotationItem(QGraphicsTextItem):
 
 
 # ======================================================================= #
+# HierInputPinItem – right-pointing arrow/chevron                        #
+# ======================================================================= #
+
+class HierInputPinItem(BlockItem):
+    """Visual item for a hierarchical input pin."""
+
+    BLOCK_W = 60.0
+    BLOCK_H = 40.0
+
+    def _create_port_items(self) -> None:
+        self._port_items = []
+        for port in self.block.output_ports:
+            pi = PortItem(port, self)
+            pi.setPos(self.BLOCK_W, self.BLOCK_H / 2)
+            self._port_items.append(pi)
+
+    def paint_shape(self, painter: QPainter) -> None:
+        w, h = self.BLOCK_W, self.BLOCK_H
+        color = QColor(self.block.color)
+        gradient = QLinearGradient(0, 0, w, 0)
+        gradient.setColorAt(0, color.darker(120))
+        gradient.setColorAt(1, color.lighter(130))
+        painter.setBrush(QBrush(gradient))
+        # Right-pointing chevron (arrow) shape
+        arrow = QPolygonF([
+            QPointF(0, 4),
+            QPointF(w * 0.65, 4),
+            QPointF(w, h / 2),
+            QPointF(w * 0.65, h - 4),
+            QPointF(0, h - 4),
+        ])
+        painter.drawPolygon(arrow)
+        painter.setPen(QPen(Qt.white, 1.0))
+        painter.setFont(QFont("Arial", 7, QFont.Bold))
+        pin_name = getattr(self.block, "pin_name", self.block.label)
+        painter.drawText(QRectF(2, 0, w * 0.6, h), Qt.AlignCenter, pin_name)
+
+
+# ======================================================================= #
+# HierOutputPinItem – left-pointing arrow/chevron                        #
+# ======================================================================= #
+
+class HierOutputPinItem(BlockItem):
+    """Visual item for a hierarchical output pin."""
+
+    BLOCK_W = 60.0
+    BLOCK_H = 40.0
+
+    def _create_port_items(self) -> None:
+        self._port_items = []
+        for port in self.block.input_ports:
+            pi = PortItem(port, self)
+            pi.setPos(0.0, self.BLOCK_H / 2)
+            self._port_items.append(pi)
+
+    def paint_shape(self, painter: QPainter) -> None:
+        w, h = self.BLOCK_W, self.BLOCK_H
+        color = QColor(self.block.color)
+        gradient = QLinearGradient(w, 0, 0, 0)
+        gradient.setColorAt(0, color.darker(120))
+        gradient.setColorAt(1, color.lighter(130))
+        painter.setBrush(QBrush(gradient))
+        # Left-pointing chevron shape
+        arrow = QPolygonF([
+            QPointF(w, 4),
+            QPointF(w * 0.35, 4),
+            QPointF(0, h / 2),
+            QPointF(w * 0.35, h - 4),
+            QPointF(w, h - 4),
+        ])
+        painter.drawPolygon(arrow)
+        painter.setPen(QPen(Qt.white, 1.0))
+        painter.setFont(QFont("Arial", 7, QFont.Bold))
+        pin_name = getattr(self.block, "pin_name", self.block.label)
+        painter.drawText(QRectF(w * 0.35, 0, w * 0.65, h), Qt.AlignCenter, pin_name)
+
+
+# ======================================================================= #
+# HierSubcircuitItem                                                       #
+# ======================================================================= #
+
+class HierSubcircuitItem(BlockItem):
+    """Visual item for a hierarchical sub-circuit reference."""
+
+    BLOCK_W = 120.0
+    BLOCK_H = 80.0
+
+    @property
+    def _effective_h(self) -> float:
+        n_pins = max(len(self.block.input_ports), len(self.block.output_ports))
+        return max(self.BLOCK_H, 30 + n_pins * 20)
+
+    def boundingRect(self) -> QRectF:
+        return QRectF(0, 0, self.BLOCK_W, self._effective_h)
+
+    def _create_port_items(self) -> None:
+        self._port_items = []
+        h = self._effective_h
+        inputs = self.block.input_ports
+        for i, port in enumerate(inputs):
+            y = h * (i + 1) / (len(inputs) + 1)
+            pi = PortItem(port, self)
+            pi.setPos(0.0, y)
+            self._port_items.append(pi)
+        outputs = self.block.output_ports
+        for i, port in enumerate(outputs):
+            y = h * (i + 1) / (len(outputs) + 1)
+            pi = PortItem(port, self)
+            pi.setPos(self.BLOCK_W, y)
+            self._port_items.append(pi)
+
+    def paint_shape(self, painter: QPainter) -> None:
+        w = self.BLOCK_W
+        h = self._effective_h
+        file_missing = getattr(self.block, "file_missing", False)
+
+        if file_missing:
+            # Red diagonal stripe pattern for missing file
+            painter.setBrush(QBrush(QColor("#5A1A1A")))
+            painter.drawRoundedRect(QRectF(0, 0, w, h), 6, 6)
+            painter.setPen(QPen(QColor("#CC2222"), 2.0))
+            step = 16
+            for x in range(-int(h), int(w) + int(h), step):
+                painter.drawLine(QPointF(x, 0), QPointF(x + h, h))
+            painter.setPen(QPen(QColor("#FF6666"), 2.0))
+            painter.setFont(QFont("Arial", 10, QFont.Bold))
+            painter.drawText(QRectF(0, 0, w, h), Qt.AlignCenter, "MISSING")
+        else:
+            color = QColor(self.block.color)
+            gradient = QLinearGradient(0, 0, 0, h)
+            gradient.setColorAt(0, color.lighter(130))
+            gradient.setColorAt(1, color.darker(130))
+            painter.setBrush(QBrush(gradient))
+            painter.drawRoundedRect(QRectF(0, 0, w, h), 6, 6)
+            # Header bar
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(QColor(0, 0, 0, 60)))
+            painter.drawRoundedRect(QRectF(2, 2, w - 4, 18), 4, 4)
+            # Block name
+            painter.setPen(QPen(Qt.white, 1.0))
+            painter.setFont(QFont("Arial", 8, QFont.Bold))
+            painter.drawText(QRectF(4, 2, w - 8, 18), Qt.AlignCenter, self.block.label)
+            symbol = getattr(self.block, "symbol", {}) or {}
+            symbol_shapes = symbol.get("shapes", []) if isinstance(symbol, dict) else []
+            if symbol_shapes:
+                inner_top = 22.0
+                inner_h = max(10.0, h - inner_top - 4.0)
+                inner_rect = QRectF(4.0, inner_top, w - 8.0, inner_h)
+
+                def map_x(px: float) -> float:
+                    return inner_rect.left() + ((px + 200.0) / 400.0) * inner_rect.width()
+
+                def map_y(py: float) -> float:
+                    return inner_rect.top() + ((py + 150.0) / 300.0) * inner_rect.height()
+
+                for shape in symbol_shapes:
+                    if shape.get("type") == "polygon":
+                        pts = shape.get("points", [])
+                        if len(pts) >= 3:
+                            poly = QPolygonF([QPointF(map_x(float(p[0])), map_y(float(p[1]))) for p in pts])
+                            col = QColor(shape.get("color", "#FFFFFF"))
+                            painter.setPen(QPen(col, 1.5))
+                            painter.setBrush(QBrush(col if shape.get("filled", True) else Qt.NoBrush))
+                            painter.drawPolygon(poly)
+                    elif shape.get("type") == "text":
+                        text = shape.get("text", "")
+                        if text:
+                            col = QColor(shape.get("color", "#FFFFFF"))
+                            size = int(shape.get("size", 10))
+                            painter.setPen(QPen(col, 1))
+                            painter.setFont(QFont("Arial", max(6, size)))
+                            painter.drawText(
+                                QPointF(map_x(float(shape.get("x", 0.0))), map_y(float(shape.get("y", 0.0)))),
+                                text,
+                            )
+            else:
+                # Pin labels (inputs on left, outputs on right)
+                painter.setFont(QFont("Arial", 7))
+                inputs = self.block.input_ports
+                for i, port in enumerate(inputs):
+                    y = h * (i + 1) / (len(inputs) + 1)
+                    painter.drawText(QRectF(4, y - 8, w * 0.45, 14), Qt.AlignLeft | Qt.AlignVCenter, port.name)
+                outputs = self.block.output_ports
+                for i, port in enumerate(outputs):
+                    y = h * (i + 1) / (len(outputs) + 1)
+                    painter.drawText(QRectF(w * 0.55, y - 8, w * 0.45 - 4, 14), Qt.AlignRight | Qt.AlignVCenter, port.name)
+            # Border
+            painter.setPen(QPen(QColor("#AA88FF"), 2.0))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRoundedRect(QRectF(0, 0, w, h), 6, 6)
+
+
+# ======================================================================= #
 # Factory: block model → BlockItem subclass                               #
 # ======================================================================= #
 
 _ITEM_MAP = {
-    "Amplifier":      AmplifierItem,
-    "Attenuator":     AttenuatorItem,
-    "Mixer":          MixerItem,
-    "SparBlock":      SparBlockItem,
+    "Amplifier":       AmplifierItem,
+    "Attenuator":      AttenuatorItem,
+    "Mixer":           MixerItem,
+    "SparBlock":       SparBlockItem,
     "TransferFnBlock": TransferFnItem,
-    "LowPassFilter":  LPFItem,
-    "HighPassFilter": HPFItem,
-    "PowerSplitter":  SplitterItem,
-    "PowerCombiner":  SplitterItem,
-    "Switch":         SwitchItem,
-    "Source":         SourceItem,
-    "Sink":           SinkItem,
+    "LowPassFilter":   LPFItem,
+    "HighPassFilter":  HPFItem,
+    "PowerSplitter":   SplitterItem,
+    "PowerCombiner":   SplitterItem,
+    "Switch":          SwitchItem,
+    "Source":          SourceItem,
+    "Sink":            SinkItem,
+    "HierInputPin":    HierInputPinItem,
+    "HierOutputPin":   HierOutputPinItem,
+    "HierSubcircuit":  HierSubcircuitItem,
 }
 
 

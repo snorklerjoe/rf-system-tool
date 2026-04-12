@@ -11,14 +11,14 @@ Handles:
 from __future__ import annotations
 
 import math
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Callable
 
 from PySide6.QtWidgets import (
     QGraphicsScene, QGraphicsView,
     QGraphicsPathItem, QGraphicsSimpleTextItem, QGraphicsItem,
 )
 from PySide6.QtGui import QPen, QColor, QPainterPath, QBrush, QTransform
-from PySide6.QtCore import Qt, QPointF, Signal
+from PySide6.QtCore import Qt, QPointF, QPoint, Signal
 
 from rf_tool.models.rf_block import RFBlock
 from rf_tool.models.signal import Signal as RFSignal
@@ -32,6 +32,13 @@ MIN_POWER_MW = 1e-300
 MIN_PROPAGATION_ITERATIONS = 1000
 # Multiplier chosen to allow multi-branch convergence while preventing runaway loops.
 ITERATIONS_PER_CONNECTION = 40
+
+
+def _pluralized(count: int, singular: str, plural: Optional[str] = None) -> str:
+    """Return singular/plural form based on *count*."""
+    if count == 1:
+        return singular
+    return plural if plural is not None else f"{singular}s"
 
 
 # ======================================================================= #
@@ -212,7 +219,7 @@ class RFScene(QGraphicsScene):
         selected_wires = [item for item in self.selectedItems() if isinstance(item, WireItem)]
         selected_blocks = [item for item in self.selectedItems() if isinstance(item, BlockItem)]
 
-        if len(selected_wires) == 1 and not selected_blocks:
+        if len(selected_wires) >= 1 and not selected_blocks:
             wire = selected_wires[0]
             src_bid = wire.src_port.parentItem().block.block_id
             dst_bid = wire.dst_port.parentItem().block.block_id
@@ -382,6 +389,13 @@ class RFScene(QGraphicsScene):
             return False
         if len(a.spurs) != len(b.spurs):
             return False
+        a_spurs = sorted(a.spurs, key=lambda s: (s.frequency, s.power_dbm))
+        b_spurs = sorted(b.spurs, key=lambda s: (s.frequency, s.power_dbm))
+        for a_spur, b_spur in zip(a_spurs, b_spurs):
+            if abs(a_spur.frequency - b_spur.frequency) > FREQUENCY_EPSILON_HZ:
+                return False
+            if abs(a_spur.power_dbm - b_spur.power_dbm) > POWER_EPSILON_DBM:
+                return False
         a_nf = a.get_noise_floor_dbm()
         b_nf = b.get_noise_floor_dbm()
         if not (a_nf is None and b_nf is None):
@@ -395,19 +409,32 @@ class RFScene(QGraphicsScene):
     def _merge_signals(existing: Optional[RFSignal], incoming: RFSignal) -> RFSignal:
         if existing is None:
             return incoming.copy()
-        out = existing.copy()
-        p_total_mw = (10.0 ** (existing.power_dbm / 10.0)) + (10.0 ** (incoming.power_dbm / 10.0))
-        out.power_dbm = 10.0 * math.log10(max(p_total_mw, MIN_POWER_MW))
+        tone_bins: List[Tuple[float, float]] = []
+
+        def _add_tone(freq_hz: float, power_dbm: float) -> None:
+            power_mw = 10.0 ** (power_dbm / 10.0)
+            for i, (f_hz, p_mw) in enumerate(tone_bins):
+                if abs(f_hz - freq_hz) < 1e-3:
+                    tone_bins[i] = (f_hz, p_mw + power_mw)
+                    return
+            tone_bins.append((freq_hz, power_mw))
+
+        _add_tone(existing.carrier_frequency, existing.power_dbm)
+        for spur in existing.spurs:
+            _add_tone(spur.frequency, spur.power_dbm)
+        _add_tone(incoming.carrier_frequency, incoming.power_dbm)
         for spur in incoming.spurs:
-            found = False
-            for e_spur in out.spurs:
-                if abs(e_spur.frequency - spur.frequency) < 1e-3:
-                    spur_mw = (10.0 ** (e_spur.power_dbm / 10.0)) + (10.0 ** (spur.power_dbm / 10.0))
-                    e_spur.power_dbm = 10.0 * math.log10(max(spur_mw, MIN_POWER_MW))
-                    found = True
-                    break
-            if not found:
-                out.spurs.append(spur)
+            _add_tone(spur.frequency, spur.power_dbm)
+
+        combined_tones = sorted(
+            [(f_hz, 10.0 * math.log10(max(p_mw, MIN_POWER_MW))) for f_hz, p_mw in tone_bins],
+            key=lambda x: x[1],
+            reverse=True,
+        )
+        carrier_f, carrier_p = combined_tones[0]
+        out = RFSignal(carrier_frequency=carrier_f, power_dbm=carrier_p, spurs=[])
+        for f_hz, p_dbm in combined_tones[1:]:
+            out.add_spur(f_hz, p_dbm)
         existing_nf = existing.get_noise_floor_dbm()
         incoming_nf = incoming.get_noise_floor_dbm()
         if existing_nf is None and incoming_nf is None:
@@ -416,8 +443,8 @@ class RFScene(QGraphicsScene):
             elif incoming.snr_db is None:
                 out.snr_db = existing.snr_db
             else:
-                existing_mw = 10.0 ** (existing.power_dbm / 10.0)
-                incoming_mw = 10.0 ** (incoming.power_dbm / 10.0)
+                existing_mw = 10.0 ** (existing.total_power_dbm() / 10.0)
+                incoming_mw = 10.0 ** (incoming.total_power_dbm() / 10.0)
                 noise_existing = existing_mw / (10.0 ** (existing.snr_db / 10.0))
                 noise_incoming = incoming_mw / (10.0 ** (incoming.snr_db / 10.0))
                 total_noise = noise_existing + noise_incoming
@@ -444,7 +471,7 @@ class RFScene(QGraphicsScene):
             connection["dst_port"],
         )
 
-    def propagate_signals(self) -> Dict[str, "RFSignal"]:
+    def propagate_signals(self, message_callback: Optional[Callable[[str, str], None]] = None) -> Dict[str, "RFSignal"]:
         """
         Propagate signals from Source blocks through the graph.
 
@@ -452,8 +479,10 @@ class RFScene(QGraphicsScene):
         -------
         dict mapping block_id -> last Signal received at that block.
         """
-        from rf_tool.blocks.components import Source
+        from rf_tool.blocks.components import Source, PowerCombiner
         signals_at: Dict[str, Dict[str, RFSignal]] = {}
+        for item in self._block_items.values():
+            item.block.reset_runtime_state()
 
         # Build adjacency: src_bid/src_port -> (dst_bid, dst_port)
         adj: Dict[Tuple, List[Tuple]] = {}
@@ -462,6 +491,7 @@ class RFScene(QGraphicsScene):
             adj.setdefault(key, []).append((c["dst_block_id"], c["dst_port"]))
 
         wire_power: Dict[Tuple[str, str, str, str], float] = {}
+        wire_signals: Dict[Tuple[str, str], Dict[Tuple[str, str, str, str], RFSignal]] = {}
         for w in self._wires:
             key = (
                 w.src_port.parentItem().block.block_id,
@@ -480,8 +510,20 @@ class RFScene(QGraphicsScene):
                 sig = item.block.generate()
                 signals_at.setdefault(bid, {})[item.block.output_ports[0].name] = sig
                 queue.append((bid, item.block.output_ports[0].name, sig))
+                if message_callback is not None:
+                    message_callback(
+                        f"source {item.block.label}: {sig.carrier_frequency/1e9:.6g} GHz @ {sig.power_dbm:.2f} dBm",
+                        "info",
+                    )
             else:
                 item.set_power_warning("ok")
+
+        if message_callback is not None:
+            message_callback(
+                f"propagation seeded with {len(queue)} source {_pluralized(len(queue), 'signal')} across "
+                f"{len(self._connections)} {_pluralized(len(self._connections), 'connection')}.",
+                "info",
+            )
 
         # Event-based propagation
         max_iterations = max(MIN_PROPAGATION_ITERATIONS, len(self._connections) * ITERATIONS_PER_CONNECTION)
@@ -496,14 +538,35 @@ class RFScene(QGraphicsScene):
                 if dst_item is None:
                     continue
                 c_key = (src_bid, src_port, dst_bid, dst_port)
-                wire_power[c_key] = sig.power_dbm
-                merged_in = self._merge_signals(signals_at.setdefault(dst_bid, {}).get(dst_port), sig)
+                wire_power[c_key] = sig.total_power_dbm()
                 prev_in = signals_at.setdefault(dst_bid, {}).get(dst_port)
+                port_key = (dst_bid, dst_port)
+                per_wire = wire_signals.setdefault(port_key, {})
+                prev_wire_sig = per_wire.get(c_key)
+                if self._signals_equivalent(prev_wire_sig, sig):
+                    continue
+                per_wire[c_key] = sig.copy()
+
+                merged_iter = iter(per_wire.values())
+                first_wire_sig = next(merged_iter, None)
+                if first_wire_sig is None:
+                    continue
+                merged_in: Optional[RFSignal] = first_wire_sig.copy()
+                for wire_sig in merged_iter:
+                    merged_in = self._merge_signals(merged_in, wire_sig)
+                if merged_in is None:
+                    continue
                 signals_at.setdefault(dst_bid, {})[dst_port] = merged_in
 
                 # Power warning
-                status = dst_item.block.check_power(merged_in.power_dbm)
+                status = dst_item.block.check_power(merged_in.total_power_dbm())
                 dst_item.set_power_warning(status)
+                if message_callback is not None and status in {"low", "high"}:
+                    level = "warning" if status == "high" else "info"
+                    message_callback(
+                        f"{dst_item.block.label} input power status: {status} at {merged_in.total_power_dbm():.2f} dBm.",
+                        level,
+                    )
 
                 if self._signals_equivalent(prev_in, merged_in):
                     continue
@@ -515,14 +578,28 @@ class RFScene(QGraphicsScene):
                     result = {p.name: merged_in.copy() for p in dst_item.block.output_ports}
                 else:
                     result = dst_item.block.process(merged_in, dst_port)
-                    for out_sig in result.values():
-                        in_noise_floor = merged_in.get_noise_floor_dbm()
-                        if in_noise_floor is not None:
-                            effective_gain = out_sig.power_dbm - merged_in.power_dbm
-                            out_noise_floor = in_noise_floor + effective_gain + max(0.0, dst_item.block.nf_db)
-                            out_sig.set_noise_floor_dbm(out_noise_floor)
-                        elif merged_in.snr_db is not None and out_sig.snr_db is None:
-                            out_sig.snr_db = merged_in.snr_db - max(0.0, dst_item.block.nf_db)
+                    if message_callback is not None:
+                        for level, message in dst_item.block.pop_runtime_messages():
+                            message_callback(message, level)
+                    apply_generic_nf = not isinstance(dst_item.block, PowerCombiner)
+                    if apply_generic_nf:
+                        for out_sig in result.values():
+                            in_noise_floor = merged_in.get_noise_floor_dbm()
+                            if in_noise_floor is not None:
+                                effective_gain = out_sig.total_power_dbm() - merged_in.total_power_dbm()
+                                out_noise_floor = in_noise_floor + effective_gain + max(0.0, dst_item.block.nf_db)
+                                out_sig.set_noise_floor_dbm(out_noise_floor)
+                            elif merged_in.snr_db is not None and out_sig.snr_db is None:
+                                out_sig.snr_db = merged_in.snr_db - max(0.0, dst_item.block.nf_db)
+                    if message_callback is not None:
+                        for out_port, out_sig in result.items():
+                            n_tones = 1 + len(out_sig.spurs)
+                            message_callback(
+                                f"{dst_item.block.label}:{out_port} updated with "
+                                f"{n_tones} {_pluralized(n_tones, 'tone')}; "
+                                f"primary tone {out_sig.carrier_frequency/1e9:.6g} GHz @ {out_sig.power_dbm:.2f} dBm.",
+                                "info",
+                            )
 
                 for out_port, out_sig in result.items():
                     prev_out = signals_at.setdefault(dst_bid, {}).get(out_port)
@@ -552,6 +629,15 @@ class RFScene(QGraphicsScene):
                         color = QColor("#FFD75E")
             text = f"{pwr:.2f} dBm" if math.isfinite(pwr) else "-∞ dBm"
             w.set_power_label(text, color)
+
+        if iterations >= max_iterations:
+            if message_callback is not None:
+                message_callback(
+                    "propagation reached iteration cap before convergence; results may be partial.",
+                    "warning",
+                )
+        elif message_callback is not None:
+            message_callback(f"propagation converged in {iterations} iteration(s).", "info")
 
         return signals_at
 
@@ -616,11 +702,16 @@ class RFCanvasView(QGraphicsView):
     def __init__(self, scene: RFScene, parent=None):
         super().__init__(scene, parent)
         self.setRenderHint(self.renderHints() | self.renderHints().Antialiasing)
-        self.setDragMode(QGraphicsView.NoDrag)
+        # Rubber-band for multi-selection; right-click drag pans manually
+        self.setDragMode(QGraphicsView.RubberBandDrag)
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.AnchorUnderMouse)
         self._zoom = 1.0
-        
+
+        # Right-click pan state
+        self._panning = False
+        self._pan_start = None
+
         # Touch gestures
         self.setAttribute(Qt.WA_AcceptTouchEvents, True)
         self._touch_start_distance = 0.0
@@ -631,6 +722,48 @@ class RFCanvasView(QGraphicsView):
         self._zoom *= factor
         self._zoom = max(0.1, min(self._zoom, 10.0))
         self.setTransform(QTransform().scale(self._zoom, self._zoom))
+
+    # ------------------------------------------------------------------ #
+    # Right-click panning                                                  #
+    # ------------------------------------------------------------------ #
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.RightButton:
+            self._panning = True
+            self._pan_start = event.pos()
+            self.setCursor(Qt.ClosedHandCursor)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._panning and self._pan_start is not None:
+            delta = event.pos() - self._pan_start
+            self._pan_start = event.pos()
+            self.horizontalScrollBar().setValue(
+                self.horizontalScrollBar().value() - delta.x()
+            )
+            self.verticalScrollBar().setValue(
+                self.verticalScrollBar().value() - delta.y()
+            )
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.RightButton and self._panning:
+            self._panning = False
+            self._pan_start = None
+            self.setCursor(Qt.ArrowCursor)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def contextMenuEvent(self, event) -> None:
+        # Suppress context menu while or just after panning
+        if self._panning:
+            event.accept()
+            return
+        super().contextMenuEvent(event)
 
     def zoom_in(self) -> None:
         """Zoom in."""
@@ -693,17 +826,26 @@ class RFCanvasView(QGraphicsView):
 
     def touchEvent(self, event) -> bool:
         """Handle touch events for multi-touch gestures (pinch-to-zoom, pan)."""
-        if event.touchPoints().count() == 2:
-            # Two-finger pinch-to-zoom
+        from PySide6.QtCore import QEvent
+        _TOUCH_BEGIN  = QEvent.TouchBegin
+        _TOUCH_UPDATE = QEvent.TouchUpdate
+
+        # PySide6 uses event.points(); fall back to touchPoints() for compatibility
+        try:
+            touch_points = event.points()
+        except AttributeError:
             touch_points = event.touchPoints()
+
+        if len(touch_points) == 2:
+            # Two-finger pinch-to-zoom
             p1 = touch_points[0].screenPos()
             p2 = touch_points[1].screenPos()
             distance = math.sqrt((p2.x() - p1.x()) ** 2 + (p2.y() - p1.y()) ** 2)
-            
-            if event.type() == 0:  # TouchBegin
+
+            if event.type() == _TOUCH_BEGIN:
                 self._touch_start_distance = distance
                 self._touch_start_zoom = self._zoom
-            elif event.type() == 1:  # TouchUpdate
+            elif event.type() == _TOUCH_UPDATE:
                 if self._touch_start_distance > 0:
                     scale_factor = distance / self._touch_start_distance
                     new_zoom = self._touch_start_zoom * scale_factor
@@ -711,11 +853,19 @@ class RFCanvasView(QGraphicsView):
                     self._zoom = new_zoom
                     self.setTransform(QTransform().scale(self._zoom, self._zoom))
             return True
-        elif event.touchPoints().count() == 1:
+        elif len(touch_points) == 1:
             # Single-finger pan
-            touch_point = event.touchPoints()[0]
-            if event.type() == 1:  # TouchUpdate
-                delta = touch_point.screenPos() - touch_point.lastScreenPos()
-                self.translate(delta.x(), delta.y())
+            touch_point = touch_points[0]
+            if event.type() == _TOUCH_UPDATE:
+                try:
+                    delta = touch_point.screenPos() - touch_point.lastScreenPos()
+                except AttributeError:
+                    delta = touch_point.screenPos() - touch_point.startScreenPos()
+                self.horizontalScrollBar().setValue(
+                    self.horizontalScrollBar().value() - int(delta.x())
+                )
+                self.verticalScrollBar().setValue(
+                    self.verticalScrollBar().value() - int(delta.y())
+                )
             return True
         return False

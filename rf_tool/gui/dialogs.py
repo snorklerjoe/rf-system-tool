@@ -90,7 +90,9 @@ class PropertiesPanel(QWidget):
         )
 
         if not isinstance(b, Source):
-            self._add_float_row("Gain (dB)", b.gain_db, -200, 200, self._on_gain_changed)
+            frequency_shaped = isinstance(b, (SparBlock, TransferFnBlock, LowPassFilter, HighPassFilter))
+            if not frequency_shaped:
+                self._add_float_row("Gain (dB)", b.gain_db, -200, 200, self._on_gain_changed)
             self._add_float_row("NF (dB)", b.nf_db, 0, 100, self._on_nf_changed)
             self._add_optional_float_row("P1dB out (dBm)", b.p1db_dbm, -100, 100, self._on_p1db_changed)
             self._add_optional_float_row("OIP3 (dBm)", b.oip3_dbm, -100, 100, self._on_oip3_changed)

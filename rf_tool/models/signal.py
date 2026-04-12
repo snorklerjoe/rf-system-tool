@@ -6,8 +6,10 @@ and phase noise parameters through the RF signal chain.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Callable, Tuple
 import math
+
+_FREQUENCY_TOLERANCE_HZ = 1e-3
 
 
 @dataclass
@@ -79,6 +81,57 @@ class Signal:
         if new_sig.snr_db is None and new_sig.noise_floor_dbm is not None:
             new_sig.snr_db = new_sig.power_dbm - new_sig.noise_floor_dbm
         return new_sig
+
+    def total_power_dbm(self) -> float:
+        """Return total signal power (carrier + spurs) in dBm."""
+        tones = [(self.carrier_frequency, self.power_dbm)]
+        tones.extend((s.frequency, s.power_dbm) for s in self.spurs)
+        total_mw = sum(10.0 ** (p_dbm / 10.0) for _f_hz, p_dbm in tones)
+        return 10.0 * math.log10(max(total_mw, 1e-300))
+
+    @staticmethod
+    def _combined_tones(tones: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
+        """Combine same-frequency tones in linear power and return sorted tones."""
+        bins: List[Tuple[float, float]] = []
+        for freq_hz, power_dbm in tones:
+            power_mw = 10.0 ** (power_dbm / 10.0)
+            merged = False
+            for idx, (f_bin, p_bin_mw) in enumerate(bins):
+                if abs(f_bin - freq_hz) < _FREQUENCY_TOLERANCE_HZ:
+                    bins[idx] = (f_bin, p_bin_mw + power_mw)
+                    merged = True
+                    break
+            if not merged:
+                bins.append((freq_hz, power_mw))
+        out = [(f_hz, 10.0 * math.log10(max(p_mw, 1e-300))) for f_hz, p_mw in bins]
+        out.sort(key=lambda freq_power: freq_power[1], reverse=True)
+        return out
+
+    def apply_frequency_response(self, gain_fn: Callable[[float], float]) -> "Signal":
+        """
+        Apply frequency-dependent gain to each tone independently.
+
+        The output carrier is chosen as the strongest resulting tone.
+        """
+        tones = [(self.carrier_frequency, self.power_dbm)]
+        tones.extend((s.frequency, s.power_dbm) for s in self.spurs)
+        gained_tones = [(f_hz, p_dbm + gain_fn(f_hz)) for f_hz, p_dbm in tones]
+        combined = self._combined_tones(gained_tones)
+        if not combined:
+            return self.copy()
+
+        carrier_f, carrier_p = combined[0]
+        out = Signal(carrier_frequency=carrier_f, power_dbm=carrier_p, spurs=[])
+        for f_hz, p_dbm in combined[1:]:
+            out.add_spur(f_hz, p_dbm)
+
+        in_noise = self.get_noise_floor_dbm()
+        if in_noise is not None:
+            carrier_gain = gain_fn(carrier_f)
+            out.set_noise_floor_dbm(in_noise + carrier_gain)
+        else:
+            out.snr_db = self.snr_db
+        return out
 
     def get_noise_floor_dbm(self) -> Optional[float]:
         """Return explicit noise floor if present, else infer from carrier SNR."""

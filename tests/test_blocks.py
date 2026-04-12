@@ -18,6 +18,7 @@ Also covers:
   - Source.generate()
   - Sink.process() captures signal
 """
+import json
 import math
 import pytest
 import numpy as np
@@ -29,6 +30,7 @@ from rf_tool.blocks.components import (
     LowPassFilter, HighPassFilter, PowerSplitter, PowerCombiner, Switch, Source, Sink,
     BLOCK_REGISTRY, block_from_dict,
 )
+from rf_tool.blocks.hierarchical import HierSubcircuit, analysis_blocks_from_subcircuit
 
 
 # ======================================================================= #
@@ -322,6 +324,16 @@ class TestSparBlock:
         gain = b.get_gain_db_at(5e9)
         assert gain == pytest.approx(20 * math.log10(0.5), abs=1e-4)
 
+    def test_process_applies_frequency_dependent_gain_to_spurs(self):
+        b = SparBlock()
+        b.get_gain_db_at = lambda f_hz: 10.0 if f_hz < 1.5e9 else -10.0
+        sig = make_signal(fc=1e9, pwr=0.0, spurs=[SpurTone(2e9, 0.0)])
+        out = b.process(sig)["OUT"]
+        assert out.power_dbm == pytest.approx(10.0)
+        assert len(out.spurs) == 1
+        assert out.spurs[0].frequency == pytest.approx(2e9)
+        assert out.spurs[0].power_dbm == pytest.approx(-10.0)
+
 
 # ======================================================================= #
 # TransferFnBlock                                                          #
@@ -399,6 +411,14 @@ class TestLowPassFilter:
         sig = make_signal(fc=10e9, pwr=0.0)  # well above cutoff
         out = f.process(sig)["OUT"]
         assert out.power_dbm < -30.0  # deep in stopband
+
+    def test_process_applies_lpf_gain_per_tone(self):
+        f = LowPassFilter(order=4, cutoff_hz=1e9)
+        sig = make_signal(fc=100e6, pwr=0.0, spurs=[SpurTone(10e9, 0.0)])
+        out = f.process(sig)["OUT"]
+        weakest_tone_power = min([out.power_dbm] + [s.power_dbm for s in out.spurs])
+        assert out.power_dbm > -1.0  # carrier near passband
+        assert weakest_tone_power < -60.0  # high-frequency spur is strongly attenuated
 
     def test_round_trip(self):
         f = LowPassFilter(order=5, cutoff_hz=2.4e9)
@@ -528,6 +548,38 @@ class TestPowerCombiner:
         c = PowerCombiner(n_ways=4)
         c2 = PowerCombiner.from_dict(c.to_dict())
         assert c2.n_ways == 4
+
+    def test_combiner_preserves_distinct_input_frequencies(self):
+        c = PowerCombiner(n_ways=3)
+        s1 = make_signal(fc=1.0e9, pwr=0.0)
+        s2 = make_signal(fc=1.2e9, pwr=0.0)
+        s3 = make_signal(fc=1.4e9, pwr=0.0)
+        c.process(s1, "IN0")
+        c.process(s2, "IN1")
+        out = c.process(s3, "IN2")["OUT"]
+        freqs = sorted([out.carrier_frequency] + [s.frequency for s in out.spurs])
+        assert freqs == pytest.approx([1.0e9, 1.2e9, 1.4e9])
+
+    def test_combiner_output_total_power_scales_with_active_inputs(self):
+        c = PowerCombiner(n_ways=3)
+        s1 = make_signal(fc=1.0e9, pwr=0.0)
+        s2 = make_signal(fc=1.2e9, pwr=0.0)
+        c.process(s1, "IN0")
+        out_two = c.process(s2, "IN1")["OUT"]
+        c.reset_runtime_state()
+        c.process(s1, "IN0")
+        c.process(s2, "IN1")
+        out_three = c.process(make_signal(fc=1.4e9, pwr=0.0), "IN2")["OUT"]
+        delta_db = out_three.total_power_dbm() - out_two.total_power_dbm()
+        assert delta_db == pytest.approx(10.0 * math.log10(3.0 / 2.0), abs=1e-6)
+
+    def test_combiner_logs_constructive_sum_warning(self):
+        c = PowerCombiner(n_ways=3)
+        c.process(make_signal(fc=1.0e9, pwr=-3.0), "IN0")
+        c.process(make_signal(fc=1.0e9, pwr=-3.0), "IN1")
+        _ = c.process(make_signal(fc=2.0e9, pwr=-3.0), "IN2")
+        msgs = c.pop_runtime_messages()
+        assert any(level == "warning" and "constructive summation" in msg for level, msg in msgs)
 
 
 # ======================================================================= #
@@ -782,3 +834,158 @@ class TestSignalChainPropagation:
         # After amp2: carrier=0dBm, spur: -50+10=-40dBm
         assert sig.power_dbm == pytest.approx(0.0)
         assert sig.spurs[0].power_dbm == pytest.approx(-40.0)
+
+
+# ======================================================================= #
+# Hierarchical subcircuit simulation                                       #
+# ======================================================================= #
+
+class TestHierSubcircuitSimulation:
+    def test_uses_internal_chain_not_pass_through(self, tmp_path):
+        sub_path = tmp_path / "sub_amp.json"
+        scene = {
+            "version": "1",
+            "metadata": {},
+            "blocks": [
+                {"block_type": "HierInputPin", "block_id": "in1", "pin_name": "IN", "label": "IN"},
+                {"block_type": "Amplifier", "block_id": "amp1", "gain_db": 12.0, "nf_db": 2.0},
+                {"block_type": "HierOutputPin", "block_id": "out1", "pin_name": "OUT", "label": "OUT"},
+            ],
+            "connections": [
+                {"src_block_id": "in1", "src_port": "IN", "dst_block_id": "amp1", "dst_port": "IN"},
+                {"src_block_id": "amp1", "src_port": "OUT", "dst_block_id": "out1", "dst_port": "OUT"},
+            ],
+            "annotations": [],
+        }
+        sub_path.write_text(json.dumps(scene), encoding="utf-8")
+
+        block = HierSubcircuit(subcircuit_path=str(sub_path))
+        out = block.process(make_signal(fc=2e9, pwr=-25.0), "IN")
+        assert "OUT" in out
+        assert out["OUT"].power_dbm == pytest.approx(-13.0, abs=1e-6)
+
+    def test_multi_input_internal_mixer_requires_both_inputs(self, tmp_path):
+        sub_path = tmp_path / "sub_mixer.json"
+        scene = {
+            "version": "1",
+            "metadata": {},
+            "blocks": [
+                {"block_type": "HierInputPin", "block_id": "in_rf", "pin_name": "RF", "label": "RF"},
+                {"block_type": "HierInputPin", "block_id": "in_lo", "pin_name": "LO", "label": "LO"},
+                {"block_type": "Mixer", "block_id": "mix1", "conversion_expressions": ["RF-LO"], "gain_db": -7.0},
+                {"block_type": "HierOutputPin", "block_id": "out_if", "pin_name": "IF", "label": "IF"},
+            ],
+            "connections": [
+                {"src_block_id": "in_rf", "src_port": "RF", "dst_block_id": "mix1", "dst_port": "RF"},
+                {"src_block_id": "in_lo", "src_port": "LO", "dst_block_id": "mix1", "dst_port": "LO"},
+                {"src_block_id": "mix1", "src_port": "IF", "dst_block_id": "out_if", "dst_port": "IF"},
+            ],
+            "annotations": [],
+        }
+        sub_path.write_text(json.dumps(scene), encoding="utf-8")
+
+        block = HierSubcircuit(subcircuit_path=str(sub_path))
+        assert block.process(make_signal(fc=2e9, pwr=-10.0), "RF") == {}
+
+        out = block.process(make_signal(fc=1.9e9, pwr=0.0), "LO")
+        assert "IF" in out
+        assert out["IF"].carrier_frequency == pytest.approx(100e6, rel=1e-9)
+        assert out["IF"].power_dbm == pytest.approx(-17.0, abs=1e-6)
+
+    def test_combiner_preserves_combined_noise_floor(self, tmp_path):
+        sub_path = tmp_path / "sub_combiner_nf.json"
+        scene = {
+            "version": "1",
+            "metadata": {},
+            "blocks": [
+                {"block_type": "HierInputPin", "block_id": "in0", "pin_name": "IN0", "label": "IN0"},
+                {"block_type": "HierInputPin", "block_id": "in1", "pin_name": "IN1", "label": "IN1"},
+                {"block_type": "PowerCombiner", "block_id": "cmb", "n_ways": 2, "label": "2-way Combiner"},
+                {"block_type": "HierOutputPin", "block_id": "out1", "pin_name": "OUT", "label": "OUT"},
+            ],
+            "connections": [
+                {"src_block_id": "in0", "src_port": "IN0", "dst_block_id": "cmb", "dst_port": "IN0"},
+                {"src_block_id": "in1", "src_port": "IN1", "dst_block_id": "cmb", "dst_port": "IN1"},
+                {"src_block_id": "cmb", "src_port": "OUT", "dst_block_id": "out1", "dst_port": "OUT"},
+            ],
+            "annotations": [],
+        }
+        sub_path.write_text(json.dumps(scene), encoding="utf-8")
+
+        block = HierSubcircuit(subcircuit_path=str(sub_path))
+        s0 = make_signal(fc=1.0e9, pwr=0.0)
+        s1 = make_signal(fc=2.0e9, pwr=0.0)
+        s0.set_noise_floor_dbm(-100.0)
+        s1.set_noise_floor_dbm(-100.0)
+
+        _ = block.process(s0, "IN0")
+        out = block.process(s1, "IN1")
+        assert "OUT" in out
+        assert out["OUT"].get_noise_floor_dbm() == pytest.approx(-100.0, abs=1e-6)
+
+
+class TestHierSubcircuitAnalysisFlattening:
+    def test_flattens_internal_chain_for_analysis(self, tmp_path):
+        sub_path = tmp_path / "sub_chain.json"
+        scene = {
+            "version": "1",
+            "metadata": {},
+            "blocks": [
+                {"block_type": "HierInputPin", "block_id": "in1", "pin_name": "IN", "label": "IN"},
+                {"block_type": "Amplifier", "block_id": "amp1", "gain_db": 12.0, "nf_db": 2.0, "label": "A1"},
+                {"block_type": "Attenuator", "block_id": "att1", "attenuation_db": 3.0, "label": "AT1"},
+                {"block_type": "HierOutputPin", "block_id": "out1", "pin_name": "OUT", "label": "OUT"},
+            ],
+            "connections": [
+                {"src_block_id": "in1", "src_port": "IN", "dst_block_id": "amp1", "dst_port": "IN"},
+                {"src_block_id": "amp1", "src_port": "OUT", "dst_block_id": "att1", "dst_port": "IN"},
+                {"src_block_id": "att1", "src_port": "OUT", "dst_block_id": "out1", "dst_port": "OUT"},
+            ],
+            "annotations": [],
+        }
+        sub_path.write_text(json.dumps(scene), encoding="utf-8")
+
+        blocks = analysis_blocks_from_subcircuit(str(sub_path))
+        assert [b.BLOCK_TYPE for b in blocks] == ["Amplifier", "Attenuator"]
+        assert [b.label for b in blocks] == ["A1", "AT1"]
+
+    def test_flattens_nested_subcircuits_for_analysis(self, tmp_path):
+        child_path = tmp_path / "child.json"
+        child_scene = {
+            "version": "1",
+            "metadata": {},
+            "blocks": [
+                {"block_type": "HierInputPin", "block_id": "cin", "pin_name": "IN", "label": "IN"},
+                {"block_type": "Amplifier", "block_id": "camp", "gain_db": 10.0, "label": "ChildAmp"},
+                {"block_type": "HierOutputPin", "block_id": "cout", "pin_name": "OUT", "label": "OUT"},
+            ],
+            "connections": [
+                {"src_block_id": "cin", "src_port": "IN", "dst_block_id": "camp", "dst_port": "IN"},
+                {"src_block_id": "camp", "src_port": "OUT", "dst_block_id": "cout", "dst_port": "OUT"},
+            ],
+            "annotations": [],
+        }
+        child_path.write_text(json.dumps(child_scene), encoding="utf-8")
+
+        parent_path = tmp_path / "parent.json"
+        parent_scene = {
+            "version": "1",
+            "metadata": {},
+            "blocks": [
+                {"block_type": "HierInputPin", "block_id": "pin", "pin_name": "IN", "label": "IN"},
+                {"block_type": "HierSubcircuit", "block_id": "sub1", "subcircuit_path": "child.json", "label": "Sub"},
+                {"block_type": "Attenuator", "block_id": "patt", "attenuation_db": 2.0, "label": "ParentAtt"},
+                {"block_type": "HierOutputPin", "block_id": "pout", "pin_name": "OUT", "label": "OUT"},
+            ],
+            "connections": [
+                {"src_block_id": "pin", "src_port": "IN", "dst_block_id": "sub1", "dst_port": "IN"},
+                {"src_block_id": "sub1", "src_port": "OUT", "dst_block_id": "patt", "dst_port": "IN"},
+                {"src_block_id": "patt", "src_port": "OUT", "dst_block_id": "pout", "dst_port": "OUT"},
+            ],
+            "annotations": [],
+        }
+        parent_path.write_text(json.dumps(parent_scene), encoding="utf-8")
+
+        blocks = analysis_blocks_from_subcircuit(str(parent_path))
+        assert [b.BLOCK_TYPE for b in blocks] == ["Amplifier", "Attenuator"]
+        assert [b.label for b in blocks] == ["ChildAmp", "ParentAtt"]

@@ -4,20 +4,23 @@ Main application window for RF System Tool.
 from __future__ import annotations
 
 import os
+import json
 from typing import Optional, Dict, List
 import uuid
 import copy
 
 from PySide6.QtWidgets import (
     QMainWindow, QDockWidget, QToolBar, QStatusBar,
-    QFileDialog, QMessageBox, QWidget, QLabel, QMenu,
+    QFileDialog, QMessageBox, QWidget, QLabel, QMenu, QApplication, QTextEdit,
 )
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtGui import QAction, QKeySequence, QBrush, QColor
 from PySide6.QtCore import Qt, QPointF, QSettings
 
 from rf_tool.gui.canvas import RFScene, RFCanvasView, WireItem
 from rf_tool.gui.node_items import BlockItem, AnnotationItem
 from rf_tool.gui.dialogs import PropertiesPanel, CascadeReadoutDialog, SourceSinkMetricsPanel
+from rf_tool.gui.ribbon import RibbonWidget
+from rf_tool.gui.themes import THEMES
 from rf_tool.plots.plot_windows import (
     SpectrumPlot, ActualSpectrumPlot, GainNFPlot, FrequencyResponseView,
     FrequencyComponentEditor, compute_frequency_sweep,
@@ -26,6 +29,12 @@ from rf_tool.blocks.components import (
     Amplifier, Attenuator, Mixer, SparBlock, TransferFnBlock,
     LowPassFilter, HighPassFilter, PowerSplitter, PowerCombiner, Switch, Source, Sink,
     block_from_dict,
+)
+from rf_tool.blocks.hierarchical import (
+    HierInputPin,
+    HierOutputPin,
+    HierSubcircuit,
+    analysis_blocks_from_subcircuit,
 )
 from rf_tool.models.rf_block import RFBlock
 from rf_tool.engine.cascade import compute_cascade_metrics
@@ -43,12 +52,15 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("RF System Tool")
         self.resize(1200, 760)
         self._current_file: Optional[str] = None
+        self._scene_metadata: Dict = {}
         self._p2p_start: Optional[str] = None
         self._p2p_end: Optional[str] = None
+        self._child_windows: List[QMainWindow] = []
 
         self._setup_scene()
         self._setup_dock_properties()
         self._setup_dock_metrics()
+        self._setup_dock_messages()
         self._setup_toolbar()
         self._setup_menu()
         self._setup_status_bar()
@@ -64,6 +76,10 @@ class MainWindow(QMainWindow):
 
         # Spectrum viewer
         self._spectrum_plot: Optional[ActualSpectrumPlot] = None
+
+        # Apply default theme
+        self._apply_theme("Dark")
+        self._refresh_subcircuit_buttons()
 
     # ------------------------------------------------------------------ #
     # Setup                                                                #
@@ -94,64 +110,70 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.RightDockWidgetArea, dock)
         self.splitDockWidget(self._properties_dock, dock, Qt.Vertical)
 
+    def _setup_dock_messages(self) -> None:
+        dock = QDockWidget("Messages", self)
+        dock.setObjectName("messagesDock")
+        dock.setAllowedAreas(Qt.BottomDockWidgetArea)
+        self._messages_console = QTextEdit()
+        self._messages_console.setReadOnly(True)
+        self._messages_console.setStyleSheet(
+            "QTextEdit { background: #0F1218; color: #F2F2F2; font-family: Consolas, Menlo, monospace; }"
+        )
+        dock.setWidget(self._messages_console)
+        self.addDockWidget(Qt.BottomDockWidgetArea, dock)
+        self._messages_dock = dock
+
     def _setup_toolbar(self) -> None:
-        tb = self.addToolBar("Blocks")
+        tb = self.addToolBar("Ribbon")
         tb.setMovable(False)
-        # Make toolbar more touch-friendly with larger icons
-        tb.setIconSize(tb.iconSize().__mul__(1.3))
-        
-        block_actions = [
-            ("Amplifier",    "▶ Amp",    self._add_amplifier),
-            ("Attenuator",   "⬡ Att",    self._add_attenuator),
-            ("Mixer",        "✕ Mix",    self._add_mixer),
-            ("S-Param",      "[S] Spar", self._add_spar),
-            ("H(s)",         "⨍ TF",     self._add_transfer_fn),
-            ("LPF",          "⊓ LPF",    self._add_lpf),
-            ("HPF",          "⊔ HPF",    self._add_hpf),
-            ("Splitter",     "⊕ Spl",    self._add_splitter),
-            ("Combiner",     "⊗ Cmb",    self._add_combiner),
-            ("Switch 1×2",   "⇀ SW",     self._add_switch),
-            ("Source",       "~ Src",    self._add_source),
-            ("Sink",         "⊥ Snk",    self._add_sink),
-            (None, None, None),          # separator
-            ("Annotate",     "T Ann",    self._add_annotation),
-        ]
+        tb.setFloatable(False)
 
-        for name, label, handler in block_actions:
-            if name is None:
-                tb.addSeparator()
-                continue
-            act = QAction(label, self)
-            act.setToolTip(f"Add {name}")
-            if handler:
-                act.triggered.connect(handler)
-            tb.addAction(act)
+        self._ribbon = RibbonWidget(self)
 
-        tb.addSeparator()
+        # Connect ribbon signals to main window handlers
+        self._ribbon.sig_zoom_fit.connect(self._zoom_to_fit)
+        self._ribbon.sig_propagate.connect(self._propagate_signals)
 
-        # Analysis actions
-        p2p_act = QAction("📐 P2P", self)
-        p2p_act.setToolTip("Point-to-Point Cascade Analysis")
-        p2p_act.triggered.connect(self._run_p2p_analysis)
-        tb.addAction(p2p_act)
+        # Components
+        self._ribbon.sig_add_source.connect(self._add_source)
+        self._ribbon.sig_add_sink.connect(self._add_sink)
+        self._ribbon.sig_add_amplifier.connect(self._add_amplifier)
+        self._ribbon.sig_add_attenuator.connect(self._add_attenuator)
+        self._ribbon.sig_add_mixer.connect(self._add_mixer)
+        self._ribbon.sig_add_switch.connect(self._add_switch)
+        self._ribbon.sig_add_spar.connect(self._add_spar)
+        self._ribbon.sig_add_transfer_fn.connect(self._add_transfer_fn)
+        self._ribbon.sig_add_lpf.connect(self._add_lpf)
+        self._ribbon.sig_add_hpf.connect(self._add_hpf)
+        self._ribbon.sig_add_splitter.connect(self._add_splitter)
+        self._ribbon.sig_add_combiner.connect(self._add_combiner)
+        self._ribbon.sig_add_annotation.connect(self._add_annotation)
 
-        freq_act = QAction("📈 F-Plot", self)
-        freq_act.setToolTip("Gain/NF vs Frequency Plot")
-        freq_act.triggered.connect(self._run_freq_plot)
-        tb.addAction(freq_act)
+        # Analysis
+        self._ribbon.sig_p2p_cascade.connect(self._run_p2p_analysis)
+        self._ribbon.sig_freq_plot.connect(self._run_freq_plot)
+        self._ribbon.sig_signal_spectrum.connect(self._open_spectrum_viewer)
+        self._ribbon.sig_freq_response.connect(self._open_frequency_response)
 
-        prop_act = QAction("⚡ Propagate", self)
-        prop_act.setToolTip("Propagate Signals")
-        prop_act.triggered.connect(self._propagate_signals)
-        tb.addAction(prop_act)
+        # Tools
+        self._ribbon.sig_cut.connect(self._cut_selected)
+        self._ribbon.sig_copy.connect(self._copy_selected)
+        self._ribbon.sig_paste.connect(self._paste_selected)
+        self._ribbon.sig_comment_out.connect(lambda: self._set_selected_comment_mode("out"))
+        self._ribbon.sig_comment_through.connect(lambda: self._set_selected_comment_mode("through"))
+        self._ribbon.sig_uncomment.connect(lambda: self._set_selected_comment_mode("active"))
+        self._ribbon.sig_select_all.connect(self._scene.select_all)
+        self._ribbon.sig_delete_selected.connect(self._delete_selected)
 
-        tb.addSeparator()
+        # Hierarchical
+        self._ribbon.sig_add_hier_input.connect(self._add_hier_input_pin)
+        self._ribbon.sig_add_hier_output.connect(self._add_hier_output_pin)
+        self._ribbon.sig_open_symbol_editor.connect(self._open_symbol_editor)
+        self._ribbon.sig_reload_all.connect(self._reload_all_subcircuits)
+        self._ribbon.sig_add_subcircuit.connect(self._add_subcircuit)
 
-        # View actions
-        zoom_fit_act = QAction("🔍 Fit", self, shortcut="Home")
-        zoom_fit_act.setToolTip("Zoom to Fit All (Home)")
-        zoom_fit_act.triggered.connect(self._zoom_to_fit)
-        tb.addAction(zoom_fit_act)
+        tb.addWidget(self._ribbon)
+        tb.setFixedHeight(self._ribbon.sizeHint().height())
 
     def _zoom_to_fit(self) -> None:
         """Fit all items in view."""
@@ -302,11 +324,35 @@ class MainWindow(QMainWindow):
         view_menu.addAction(act_zoom_in)
         view_menu.addAction(act_zoom_out)
         view_menu.addAction(act_zoom_reset)
+        view_menu.addSeparator()
+
+        # Themes submenu
+        themes_menu = view_menu.addMenu("&Themes")
+        for theme_name in THEMES:
+            act_theme = QAction(theme_name, self)
+            act_theme.triggered.connect(
+                lambda checked=False, tn=theme_name: self._apply_theme(tn)
+            )
+            themes_menu.addAction(act_theme)
 
     def _setup_status_bar(self) -> None:
         self._status = QStatusBar()
         self.setStatusBar(self._status)
         self._status.showMessage("Ready")
+
+    def _append_runtime_message(self, message: str, level: str = "info") -> None:
+        level_colors = {
+            "info": "#D0D0D0",
+            "warning": "#E8C35E",
+            "error": "#FF6B6B",
+        }
+        color = level_colors.get(level, level_colors["info"])
+        safe = (
+            message.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+        )
+        self._messages_console.append(f'<span style="color:{color};">{safe}</span>')
 
     # ------------------------------------------------------------------ #
     # Add block helpers                                                    #
@@ -344,6 +390,112 @@ class MainWindow(QMainWindow):
 
     def _add_annotation(self):
         self._scene.add_annotation("Annotation", *self._next_pos().toTuple())
+
+    # ------------------------------------------------------------------ #
+    # Hierarchical block helpers                                           #
+    # ------------------------------------------------------------------ #
+    def _add_hier_input_pin(self) -> None:
+        self._add_block(HierInputPin(pin_name="IN"))
+
+    def _add_hier_output_pin(self) -> None:
+        self._add_block(HierOutputPin(pin_name="OUT"))
+
+    def _add_subcircuit(self, path: str) -> None:
+        """Place a HierSubcircuit block referencing *path*."""
+        block = HierSubcircuit(subcircuit_path=path)
+        self._add_block(block)
+        if block.file_missing:
+            QMessageBox.warning(
+                self, "Missing File",
+                f"Subcircuit file not found:\n{path}\nBlock placed in MISSING state."
+            )
+
+    def _reload_all_subcircuits(self) -> None:
+        """Reload port definitions for every HierSubcircuit in the scene."""
+        reloaded = 0
+        for block in self._scene.get_all_blocks():
+            if isinstance(block, HierSubcircuit):
+                block.reload()
+                item = self._scene.get_block_item(block.block_id)
+                if item:
+                    item.rebuild_ports()
+                    item.update()
+                reloaded += 1
+        self._status.showMessage(f"Reloaded {reloaded} subcircuit block(s)")
+
+    def _open_symbol_editor(self) -> None:
+        """Open the symbol editor for the currently open circuit."""
+        from rf_tool.gui.symbol_editor import SymbolEditorDialog
+        input_pins = [
+            b.pin_name for b in self._scene.get_all_blocks()
+            if isinstance(b, HierInputPin)
+        ]
+        output_pins = [
+            b.pin_name for b in self._scene.get_all_blocks()
+            if isinstance(b, HierOutputPin)
+        ]
+        pins = input_pins + output_pins
+        if not pins:
+            QMessageBox.information(self, "Symbol Editor",
+                                    "Add at least one Hierarchical In/Out Pin in this circuit first.")
+            return
+        initial_symbol = self._scene_metadata.get("symbol", {})
+        dlg = SymbolEditorDialog(pins=pins, initial_symbol=initial_symbol, parent=self)
+        if dlg.exec():
+            self._scene_metadata["symbol"] = dlg.get_symbol()
+            self._status.showMessage("Circuit symbol updated")
+
+    def _scan_for_subcircuits(self) -> List[tuple]:
+        """
+        Scan the directory of the current file for *.json scenes that contain
+        HierInputPin or HierOutputPin blocks.
+
+        Returns list of (label, path) tuples.
+        """
+        if self._current_file:
+            directory = os.path.dirname(os.path.abspath(self._current_file))
+            current_file = os.path.abspath(self._current_file)
+        else:
+            directory = os.getcwd()
+            current_file = None
+        results = []
+        try:
+            for fname in sorted(os.listdir(directory)):
+                if not fname.endswith(".json"):
+                    continue
+                fpath = os.path.join(directory, fname)
+                if current_file and os.path.abspath(fpath) == current_file:
+                    continue
+                try:
+                    with open(fpath, "r", encoding="utf-8") as fh:
+                        data = json.load(fh)
+                    block_types = {b.get("block_type", "") for b in data.get("blocks", [])}
+                    if "HierInputPin" in block_types or "HierOutputPin" in block_types:
+                        label = os.path.splitext(fname)[0]
+                        results.append((label, fpath))
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return results
+
+    def _refresh_subcircuit_buttons(self) -> None:
+        """Refresh discovered subcircuit buttons in the ribbon."""
+        if hasattr(self, "_ribbon"):
+            self._ribbon.refresh_subcircuit_buttons(self._scan_for_subcircuits())
+
+    # ------------------------------------------------------------------ #
+    # Theme support                                                        #
+    # ------------------------------------------------------------------ #
+    def _apply_theme(self, theme_name: str) -> None:
+        theme = THEMES.get(theme_name)
+        if not theme:
+            return
+        app = QApplication.instance()
+        if app:
+            app.setStyleSheet(theme["qss"])
+        self._scene.setBackgroundBrush(QBrush(QColor(theme["canvas_bg"])))
+        self._status.showMessage(f"Theme applied: {theme_name}")
 
     # ------------------------------------------------------------------ #
     # Slots                                                                #
@@ -458,10 +610,12 @@ class MainWindow(QMainWindow):
     # Propagate signals                                                    #
     # ------------------------------------------------------------------ #
     def _propagate_signals(self) -> None:
-        signals = self._scene.propagate_signals()
+        self._append_runtime_message("starting signal propagation.")
+        signals = self._scene.propagate_signals(self._append_runtime_message)
         n_blocks = len(signals)
         self._update_metrics_panel()
         self._status.showMessage(f"Propagated signals through {n_blocks} blocks")
+        self._append_runtime_message(f"propagation complete across {n_blocks} blocks.")
 
         # If a sink is selected and has a signal, show spectrum
         selected = self._scene.selectedItems()
@@ -489,7 +643,9 @@ class MainWindow(QMainWindow):
         if item is None:
             return
         from rf_tool.blocks.components import Sink, Switch, Amplifier, Mixer
-        if isinstance(item.block, Sink):
+        if isinstance(item.block, HierSubcircuit):
+            self._open_subcircuit_window(item.block)
+        elif isinstance(item.block, Sink):
             self._scene.propagate_signals()
             if item.block.last_signal:
                 self._open_spectrum(item.block)
@@ -500,32 +656,69 @@ class MainWindow(QMainWindow):
         elif isinstance(item.block, Switch):
             item.update()  # toggle already done in SwitchItem.mouseDoubleClickEvent
 
+    def _open_subcircuit_window(self, block: HierSubcircuit) -> None:
+        """Open a new MainWindow for the given subcircuit block."""
+        if block.file_missing or not block.subcircuit_path:
+            QMessageBox.warning(self, "Open Subcircuit",
+                                f"Subcircuit file not found:\n{block.subcircuit_path}")
+            return
+        child = MainWindow()
+        child.setWindowTitle(f"RF System Tool — {os.path.basename(block.subcircuit_path)}")
+        child._open_scene_path(block.subcircuit_path)
+        child.show()
+        self._child_windows.append(child)
+
     def _on_wire_selected(self, src_bid: str, src_port: str, dst_bid: str, dst_port: str) -> None:
         """Handle wire selection - show its spectrum in the persistent viewer."""
-        signals_at = self._scene.propagate_signals()
-
-        if dst_bid not in signals_at or dst_port not in signals_at[dst_bid]:
-            return
-
-        signal = signals_at[dst_bid][dst_port]
-
-        src_item = self._scene.get_block_item(src_bid)
-        dst_item = self._scene.get_block_item(dst_bid)
-        src_label = src_item.block.label if src_item else "Source"
-        dst_label = dst_item.block.label if dst_item else "Dest"
-
+        self._append_runtime_message("refreshing propagation for selected wire(s).")
+        signals_at = self._scene.propagate_signals(self._append_runtime_message)
+        selected_wires = self._scene.get_selected_wires()
         if self._spectrum_plot is None:
             self._spectrum_plot = ActualSpectrumPlot(None)
             self._spectrum_plot.setAttribute(Qt.WA_DeleteOnClose, False)
 
-        self._spectrum_plot.set_signal_from_wire(signal, src_label, dst_label, dst_port)
+        if len(selected_wires) > 1:
+            overlays = []
+            for wire in selected_wires:
+                s_bid = wire.src_port.parentItem().block.block_id
+                d_bid = wire.dst_port.parentItem().block.block_id
+                s_port = wire.src_port.port.name
+                d_port = wire.dst_port.port.name
+                sig = signals_at.get(d_bid, {}).get(d_port)
+                if sig is None:
+                    continue
+                s_item = self._scene.get_block_item(s_bid)
+                d_item = self._scene.get_block_item(d_bid)
+                s_lbl = s_item.block.label if s_item else "Source"
+                d_lbl = d_item.block.label if d_item else "Dest"
+                overlays.append((f"{s_lbl}:{s_port} → {d_lbl}:{d_port}", sig))
+            if overlays:
+                self._spectrum_plot.set_multi_signals(overlays)
+                self._spectrum_plot.set_header("Multi-wire selection", "Signal Spectrum — Multiple Wires")
+                self._append_runtime_message(
+                    f"displaying {len(overlays)} selected wire spectrum trace(s)."
+                )
+        else:
+            if dst_bid not in signals_at or dst_port not in signals_at[dst_bid]:
+                return
+            signal = signals_at[dst_bid][dst_port]
+            src_item = self._scene.get_block_item(src_bid)
+            dst_item = self._scene.get_block_item(dst_bid)
+            src_label = src_item.block.label if src_item else "Source"
+            dst_label = dst_item.block.label if dst_item else "Dest"
+            self._spectrum_plot.set_signal_from_wire(signal, src_label, dst_label, dst_port)
+            self._append_runtime_message(
+                f"displaying wire spectrum {src_label}:{src_port} → {dst_label}:{dst_port} "
+                f"with {1 + len(signal.spurs)} tone(s)."
+            )
         self._spectrum_plot.show()
         self._spectrum_plot.raise_()
         self._spectrum_plot.activateWindow()
 
     def _on_blocks_selected(self, block_ids: list) -> None:
         """Handle multi-block selection - overlay all output signals in the spectrum viewer."""
-        signals_at = self._scene.propagate_signals()
+        self._append_runtime_message("refreshing propagation for selected block(s).")
+        signals_at = self._scene.propagate_signals(self._append_runtime_message)
 
         signals_with_labels = []
         for bid in block_ids:
@@ -533,16 +726,17 @@ class MainWindow(QMainWindow):
             if item is None:
                 continue
             block = item.block
-            # Get first output port signal
-            out_ports = block.output_ports
-            signal = None
-            for port in out_ports:
-                sig = signals_at.get(bid, {}).get(port.name)
-                if sig is not None:
-                    signal = sig
-                    break
-            label = f"{block.BLOCK_TYPE}: {block.label}"
-            signals_with_labels.append((label, signal))
+            port_signals = signals_at.get(bid, {})
+            added_any = False
+            for port_name, signal in port_signals.items():
+                if signal is None:
+                    continue
+                label = f"{block.BLOCK_TYPE}: {block.label} [{port_name}]"
+                signals_with_labels.append((label, signal))
+                added_any = True
+            if not added_any:
+                label = f"{block.BLOCK_TYPE}: {block.label}"
+                signals_with_labels.append((label, None))
 
         if not any(sig for _, sig in signals_with_labels):
             return
@@ -552,8 +746,10 @@ class MainWindow(QMainWindow):
             self._spectrum_plot.setAttribute(Qt.WA_DeleteOnClose, False)
 
         self._spectrum_plot.set_multi_signals(signals_with_labels)
-        self._spectrum_plot._wire_label.setText("Multi-node selection")
-        self._spectrum_plot._plot_widget.setTitle("Signal Spectrum — Multiple Nodes")
+        self._spectrum_plot.set_header("Multi-node selection", "Signal Spectrum — Multiple Nodes")
+        self._append_runtime_message(
+            f"displaying {sum(1 for _, sig in signals_with_labels if sig is not None)} block output trace(s)."
+        )
         self._spectrum_plot.show()
         self._spectrum_plot.raise_()
         self._spectrum_plot.activateWindow()
@@ -643,6 +839,10 @@ class MainWindow(QMainWindow):
         eff_blocks = self._effective_blocks(path_blocks)
         metrics = compute_cascade_metrics(eff_blocks)
         stage_labels = [f"{b.BLOCK_TYPE}: {b.label}" for b in eff_blocks]
+        self._append_runtime_message(
+            f"P2P cascade {labels[start_id]} → {labels[end_id]}: "
+            f"Gain {metrics.get('gain_db', 0.0):.2f} dB, NF {metrics.get('nf_db', 0.0):.2f} dB."
+        )
 
         dlg = CascadeReadoutDialog(
             metrics,
@@ -666,6 +866,10 @@ class MainWindow(QMainWindow):
             return
         data = compute_frequency_sweep(eff_blocks)
         metrics = compute_cascade_metrics(eff_blocks)
+        self._append_runtime_message(
+            f"Frequency plot computed for {len(eff_blocks)} blocks: "
+            f"Gain {metrics.get('gain_db', 0.0):.2f} dB, NF {metrics.get('nf_db', 0.0):.2f} dB."
+        )
 
         win = GainNFPlot(None)
         win.set_data(
@@ -687,6 +891,9 @@ class MainWindow(QMainWindow):
         out: List[RFBlock] = []
         for b in blocks:
             if b.comment_mode == "out":
+                continue
+            if isinstance(b, HierSubcircuit):
+                out.extend(self._effective_blocks(analysis_blocks_from_subcircuit(b.subcircuit_path)))
                 continue
             if b.comment_mode == "through":
                 b_passthrough = copy.deepcopy(b)
@@ -769,8 +976,10 @@ class MainWindow(QMainWindow):
         if reply == QMessageBox.Yes:
             self._scene.clear_scene()
             self._current_file = None
+            self._scene_metadata = {}
             self.setWindowTitle("RF System Tool")
             self._status.showMessage("New scene")
+            self._refresh_subcircuit_buttons()
 
     def _open_scene(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -796,9 +1005,27 @@ class MainWindow(QMainWindow):
                 item = AnnotationItem.from_dict(ann)
                 self._scene.addItem(item)
             self._current_file = path
+            self._scene_metadata = dict(data.get("metadata", {}))
             self.setWindowTitle(f"RF System Tool — {os.path.basename(path)}")
             self._status.showMessage(f"Loaded {path}")
             self._add_recent_file(path)
+
+            # Warn about missing subcircuit files
+            missing = [
+                b for b in self._scene.get_all_blocks()
+                if isinstance(b, HierSubcircuit) and b.file_missing
+            ]
+            if missing:
+                names = "\n".join(f"  • {b.subcircuit_path}" for b in missing)
+                QMessageBox.warning(
+                    self, "Missing Subcircuit Files",
+                    f"The following subcircuit file(s) were not found:\n{names}\n\n"
+                    "Affected blocks are shown in MISSING state."
+                )
+
+            # Refresh subcircuit buttons in ribbon
+            self._refresh_subcircuit_buttons()
+
         except Exception as exc:
             QMessageBox.critical(self, "Open Error", str(exc))
 
@@ -820,11 +1047,18 @@ class MainWindow(QMainWindow):
             blocks = self._scene.get_all_blocks()
             connections = self._scene.get_connections()
             annotations = [item.to_dict() for item in self._scene.get_annotations()]
-            save_scene(blocks, connections, annotations, filepath=path)
+            save_scene(
+                blocks,
+                connections,
+                annotations,
+                filepath=path,
+                metadata=self._scene_metadata,
+            )
             self._current_file = path
             self.setWindowTitle(f"RF System Tool — {os.path.basename(path)}")
             self._status.showMessage(f"Saved {path}")
             self._add_recent_file(path)
+            self._refresh_subcircuit_buttons()
         except Exception as exc:
             QMessageBox.critical(self, "Save Error", str(exc))
 

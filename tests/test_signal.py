@@ -13,6 +13,7 @@ Tests cover:
 import math
 import pytest
 from rf_tool.models.signal import Signal, SpurTone
+from rf_tool.blocks.hierarchical import _merge_signals as hier_merge_signals, _signals_equivalent as hier_signals_equivalent
 
 
 # ======================================================================= #
@@ -166,6 +167,25 @@ class TestApplyGain:
         assert out.power_dbm == pytest.approx(-8.0)
 
 
+class TestFrequencyDependentGain:
+    def test_total_power_is_superposition_of_components(self):
+        sig = Signal(1e9, 0.0, spurs=[SpurTone(2e9, 0.0)])
+        assert sig.total_power_dbm() == pytest.approx(3.0103, abs=1e-3)
+
+    def test_apply_frequency_response_scales_tones_independently(self):
+        sig = Signal(1e9, 0.0, spurs=[SpurTone(2e9, -10.0)])
+
+        def gain_fn(freq_hz: float) -> float:
+            return 20.0 if freq_hz < 1.5e9 else -20.0
+
+        out = sig.apply_frequency_response(gain_fn)
+        assert out.carrier_frequency == pytest.approx(1e9)
+        assert out.power_dbm == pytest.approx(20.0)
+        assert len(out.spurs) == 1
+        assert out.spurs[0].frequency == pytest.approx(2e9)
+        assert out.spurs[0].power_dbm == pytest.approx(-30.0)
+
+
 # ======================================================================= #
 # Signal.add_spur                                                          #
 # ======================================================================= #
@@ -258,3 +278,17 @@ class TestSignalSerialisation:
         r = repr(sig)
         assert "GHz" in r
         assert "dBm" in r
+
+
+class TestTonePropagationMerging:
+    def test_hierarchical_merge_preserves_independent_tones(self):
+        a = Signal(1.0e9, -10.0)
+        b = Signal(2.0e9, -12.0)
+        merged = hier_merge_signals(a, b)
+        freqs = sorted([merged.carrier_frequency] + [s.frequency for s in merged.spurs])
+        assert freqs == pytest.approx([1.0e9, 2.0e9])
+
+    def test_hierarchical_equivalence_detects_spur_frequency_change(self):
+        a = Signal(1.0e9, -10.0, spurs=[SpurTone(2.0e9, -40.0)])
+        b = Signal(1.0e9, -10.0, spurs=[SpurTone(2.1e9, -40.0)])
+        assert hier_signals_equivalent(a, b) is False
