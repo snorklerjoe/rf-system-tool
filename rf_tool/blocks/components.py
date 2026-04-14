@@ -826,6 +826,8 @@ class Switch(RFBlock):
             return outputs
         else:
             # Nx1: route active input to output
+            if port_name not in {p.name for p in self._input_ports}:
+                return {}
             if port_name == f"IN{self.active_port}":
                 out = signal.apply_gain(-self.insertion_loss_db)
             else:

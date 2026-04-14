@@ -635,7 +635,7 @@ class TestSwitch:
         assert sw.active_port == 0
 
     def test_round_trip(self):
-        sw = Switch(topology="2x1", n_ways=4, active_port=1, insertion_loss_db=1.0, isolation_db=35.0)
+        sw = Switch(topology="4x1", active_port=1, insertion_loss_db=1.0, isolation_db=35.0)
         sw2 = Switch.from_dict(sw.to_dict())
         assert sw2.topology == "Nx1"
         assert sw2.n_ways == 4
