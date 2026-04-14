@@ -387,14 +387,18 @@ class SourceSinkMetricsPanel(QWidget):
         self._sink_level = QLabel("N/A")
         self._sink_snr = QLabel("N/A")
         self._max_src = QLabel("N/A")
-        self._p1db = QLabel("N/A")
-        self._ip3 = QLabel("N/A")
+        self._p1db_in = QLabel("N/A")
+        self._p1db_out = QLabel("N/A")
+        self._ip3_in = QLabel("N/A")
+        self._ip3_out = QLabel("N/A")
         form2 = QFormLayout()
         form2.addRow("Sink level:", self._sink_level)
         form2.addRow("Sink SNR:", self._sink_snr)
         form2.addRow("Max source level (damage):", self._max_src)
-        form2.addRow("Cascaded P1dB:", self._p1db)
-        form2.addRow("Cascaded IP3:", self._ip3)
+        form2.addRow("Input P1dB:", self._p1db_in)
+        form2.addRow("Output P1dB:", self._p1db_out)
+        form2.addRow("Input IP3:", self._ip3_in)
+        form2.addRow("Output IP3:", self._ip3_out)
         layout.addLayout(form2)
         layout.addStretch()
 
@@ -434,17 +438,29 @@ class SourceSinkMetricsPanel(QWidget):
     def selected_sink_id(self) -> Optional[str]:
         return self._sink_combo.currentData()
 
-    def set_metrics(self, sink_level: Optional[float], sink_snr: Optional[float], max_source: Optional[float],
-                    p1db: Optional[float], ip3: Optional[float]) -> None:
+    def set_metrics(
+        self,
+        sink_level: Optional[float],
+        sink_snr: Optional[float],
+        max_source: Optional[float],
+        p1db_in: Optional[float],
+        p1db_out: Optional[float],
+        ip3_in: Optional[float],
+        ip3_out: Optional[float],
+    ) -> None:
         self._sink_level.setText("N/A" if sink_level is None else f"{sink_level:.2f} dBm")
         self._sink_snr.setText("N/A" if sink_snr is None else f"{sink_snr:.2f} dB")
         self._max_src.setText("N/A" if max_source is None else f"{max_source:.2f} dBm")
-        self._p1db.setText("N/A" if p1db is None else f"{p1db:.2f} dBm")
-        self._ip3.setText("N/A" if ip3 is None else f"{ip3:.2f} dBm")
+        self._p1db_in.setText("N/A" if p1db_in is None else f"{p1db_in:.2f} dBm")
+        self._p1db_out.setText("N/A" if p1db_out is None else f"{p1db_out:.2f} dBm")
+        self._ip3_in.setText("N/A" if ip3_in is None else f"{ip3_in:.2f} dBm")
+        self._ip3_out.setText("N/A" if ip3_out is None else f"{ip3_out:.2f} dBm")
 
         self._max_src.setStyleSheet("" if max_source is None else "color: #FF5555; font-weight: bold;")
-        self._p1db.setStyleSheet("" if p1db is None else "color: #FFD75E;")
-        self._ip3.setStyleSheet("" if ip3 is None else "color: #FFD75E;")
+        self._p1db_in.setStyleSheet("" if p1db_in is None else "color: #FFD75E;")
+        self._p1db_out.setStyleSheet("" if p1db_out is None else "color: #FFD75E;")
+        self._ip3_in.setStyleSheet("" if ip3_in is None else "color: #FFD75E;")
+        self._ip3_out.setStyleSheet("" if ip3_out is None else "color: #FFD75E;")
 
     def _on_source_changed(self):
         source_id = self.selected_source_id()
