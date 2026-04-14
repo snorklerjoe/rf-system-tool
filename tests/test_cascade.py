@@ -7,14 +7,14 @@ Covers:
   - cascade_noise_figure  (Friis formula, single/multi stage, edge cases)
   - cascade_iip3  (worst-case voltage addition, single/multi stage, None stages)
   - cascade_oip3  (= IIP3 + total_gain)
-  - cascade_p1db  (same formula as IIP3 but using input P1dB)
+  - cascade_p1db  (reciprocal-power cascade with output-referred P1dB)
   - compute_cascade_metrics  (full pipeline)
   - cascade_networks + s21_to_gain_db  (scikit-rf integration)
 
 Mathematical reference:
   Friis:     F_total = F1 + (F2-1)/G1 + (F3-1)/(G1*G2) + ...
   IP3 (wc):  1/sqrt(IIP3_tot) = sum_k sqrt(G_cum(k)) / sqrt(IIP3_k)
-  P1dB (wc): same formula with input-referred P1dB per stage
+  P1dB:      1/P1dB_out_total = sum_k 1/(P1dB_out_k * downstream_gain_k)
 """
 import math
 import pytest
@@ -329,8 +329,8 @@ class TestCascadeOIP3:
 
 class TestCascadeP1dB:
     """
-    P1dB cascade uses the same worst-case voltage formula as IP3,
-    but applied to *input-referred* P1dB per stage.
+    P1dB cascade uses reciprocal-power arithmetic with output-referred
+    stage P1dB values and downstream gains.
     """
 
     def test_single_stage(self):
@@ -347,24 +347,21 @@ class TestCascadeP1dB:
 
     def test_two_stage_hand_verify(self):
         """
-        Stage 1: G=10dB, P1dB_out=20dBm -> P1dB_in,1=10dBm (10mW)
-        Stage 2: G=15dB, P1dB_out=25dBm -> P1dB_in,2=10dBm (10mW)
+        Stage 1: G=10dB, P1dB_out,1=20dBm (=100mW)
+        Stage 2: G=15dB, P1dB_out,2=25dBm (=316.227...mW)
 
-        1/sqrt(P1dB_tot) = sqrt(1)/sqrt(10mW) + sqrt(G1_lin)/sqrt(10mW)
-                         = (1 + sqrt(G1_lin)) / sqrt(10mW)
-        G1_lin = 10^(10/10) = 10
-        sum = (1 + sqrt(10)) / sqrt(10)
-        P1dB_tot = 10 / (1 + sqrt(10))^2 mW
+        1/P1dB_out_total = 1/(P1dB1 * G2) + 1/(P1dB2)
+        P1dB_in_total = P1dB_out_total / (G1*G2)
         """
         G1_lin = db_to_linear_power(10.0)
-        p1db_in_1 = 20.0 - 10.0  # = 10 dBm
-        p1db_in_2 = 25.0 - 15.0  # = 10 dBm
-        IIP3_1_mw = dbm_to_mw(p1db_in_1)
-        IIP3_2_mw = dbm_to_mw(p1db_in_2)
-        term1 = math.sqrt(1.0) / math.sqrt(IIP3_1_mw)
-        term2 = math.sqrt(G1_lin) / math.sqrt(IIP3_2_mw)
-        expected_mw = 1.0 / (term1 + term2) ** 2
-        expected_dbm = mw_to_dbm(expected_mw)
+        G2_lin = db_to_linear_power(15.0)
+        p1db_out_1_mw = dbm_to_mw(20.0)
+        p1db_out_2_mw = dbm_to_mw(25.0)
+
+        inv_p1db_out_total = 1.0 / (p1db_out_1_mw * G2_lin) + 1.0 / p1db_out_2_mw
+        p1db_out_total_mw = 1.0 / inv_p1db_out_total
+        p1db_in_total_mw = p1db_out_total_mw / (G1_lin * G2_lin)
+        expected_dbm = mw_to_dbm(p1db_in_total_mw)
 
         result = cascade_p1db([10.0, 15.0], [20.0, 25.0])
         assert result == pytest.approx(expected_dbm, rel=1e-9)

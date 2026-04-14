@@ -11,7 +11,7 @@ Small-signal (linear) analysis
 Large-signal (non-linear) scalar analysis
 ==========================================
 * IP3 cascading using worst-case phase-aligned voltage addition.
-* P1dB cascading using the same approach.
+* P1dB cascading using reciprocal-power cascade arithmetic.
 
 The two analyses are intentionally kept SEPARATE so that complex
 S-parameter math is never mixed with scalar nonlinear math.
@@ -220,13 +220,15 @@ def cascade_p1db(
     """
     Compute cascaded input-referred 1-dB compression point.
 
-    Uses the same voltage-addition worst-case formula as IP3 but applied
-    to P1dB directly.  Referred to the system input.
+    Uses reciprocal-power cascade arithmetic with output-referred
+    stage P1dB values and downstream gains:
 
-        1 / sqrt(P1dB_in_total_mW) =
-            sum_k sqrt(G1*...*G(k-1)) / sqrt(P1dB_in_k_mW)
+        1 / P1dB_out_total_mW =
+            sum_k 1 / (P1dB_out_k_mW * G_{k+1} * ... * G_N)
 
-    where P1dB_in_k is the *input* P1dB of stage k = P1dB_out_k - gain_k.
+    The reported result is then input-referred:
+
+        P1dB_in_total_mW = P1dB_out_total_mW / (G1 * ... * G_N)
 
     Parameters
     ----------
@@ -244,22 +246,31 @@ def cascade_p1db(
         raise ValueError("gains_db and p1db_out_dbm must have the same length")
 
     Gs = [db_to_linear_power(g) for g in gains_db]
+    total_gain = 1.0
+    for g in Gs:
+        total_gain *= g
+
+    # downstream_gains[i] = product(G_{i+1} ... G_N), with 1.0 for last stage
+    downstream_gains = [1.0] * len(Gs)
+    product_after_stage = 1.0
+    for i in range(len(Gs) - 1, -1, -1):
+        # Product of gains strictly after stage i: G_{i+1} * ... * G_N
+        downstream_gains[i] = product_after_stage
+        product_after_stage *= Gs[i]
+
     sum_term = 0.0
-    cumulative_gain = 1.0
-
     for i, p1db_dbm in enumerate(p1db_out_dbm):
-        if p1db_dbm is not None:
-            # Convert output P1dB to input P1dB for this stage
-            p1db_in_dbm = p1db_dbm - gains_db[i]
-            p1db_in_mw = dbm_to_mw(p1db_in_dbm)
-            sum_term += math.sqrt(cumulative_gain) / math.sqrt(p1db_in_mw)
-        cumulative_gain *= Gs[i]
+        if p1db_dbm is None:
+            continue
+        p1db_out_mw = dbm_to_mw(p1db_dbm)
+        sum_term += 1.0 / (p1db_out_mw * downstream_gains[i])
 
-    if sum_term == 0.0:
+    if sum_term <= 0.0:
         return None
 
-    p1db_total_mw = 1.0 / (sum_term ** 2)
-    return mw_to_dbm(p1db_total_mw)
+    p1db_out_total_mw = 1.0 / sum_term
+    p1db_in_total_mw = p1db_out_total_mw / total_gain
+    return mw_to_dbm(p1db_in_total_mw)
 
 
 # ======================================================================= #
