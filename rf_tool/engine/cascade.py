@@ -294,6 +294,7 @@ def compute_cascade_metrics(blocks: list) -> dict:
         "iip3_dbm"      : input-referred cascaded IP3 (dBm or None)
         "oip3_dbm"      : output-referred cascaded IP3 (dBm or None)
         "p1db_in_dbm"   : input-referred cascaded P1dB (dBm or None)
+        "p1db_out_dbm"  : output-referred cascaded P1dB (dBm or None)
         "min_damage_dbm": most restrictive max input power (dBm or None)
         "max_required_dbm": highest input floor from stage min-input limits, referred to system input (dBm or None)
         "stage_gains"   : per-stage gain (dB)
@@ -307,6 +308,7 @@ def compute_cascade_metrics(blocks: list) -> dict:
             "iip3_dbm": None,
             "oip3_dbm": None,
             "p1db_in_dbm": None,
+            "p1db_out_dbm": None,
             "min_damage_dbm": None,
             "max_required_dbm": None,
             "stage_gains": [],
@@ -350,12 +352,17 @@ def compute_cascade_metrics(blocks: list) -> dict:
         running += g
         cum_gains.append(running)
 
+    total_gain_db = cascade_gain(gains)
+    p1db_in_dbm = cascade_p1db(gains, p1dbs_out)
+    p1db_out_dbm = (p1db_in_dbm + total_gain_db) if p1db_in_dbm is not None else None
+
     return {
-        "gain_db": cascade_gain(gains),
+        "gain_db": total_gain_db,
         "nf_db": cascade_noise_figure(gains, nfs),
         "iip3_dbm": cascade_iip3(gains, iip3s),
         "oip3_dbm": cascade_oip3(gains, iip3s),
-        "p1db_in_dbm": cascade_p1db(gains, p1dbs_out),
+        "p1db_in_dbm": p1db_in_dbm,
+        "p1db_out_dbm": p1db_out_dbm,
         "min_damage_dbm": min_damage,
         "max_required_dbm": max_required,
         "stage_gains": gains,

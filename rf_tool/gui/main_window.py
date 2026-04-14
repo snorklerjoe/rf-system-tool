@@ -950,6 +950,9 @@ class MainWindow(QMainWindow):
         path_blocks = self._path_blocks(source_id, sink_id)
         effective = self._effective_blocks(path_blocks)
         metrics = compute_cascade_metrics(effective) if effective else {}
+        p1db_in = metrics.get("p1db_in_dbm") if metrics else None
+        gain_db = metrics.get("gain_db") if metrics else None
+        p1db_out = (p1db_in + gain_db) if (p1db_in is not None and gain_db is not None) else None
         source_item = self._scene.get_block_item(source_id) if source_id else None
         sink_level = None
         sink_snr = None
@@ -963,8 +966,8 @@ class MainWindow(QMainWindow):
             sink_level=sink_level,
             sink_snr=sink_snr,
             max_source=self._max_source_safe_power(source_id),
-            p1db_in=metrics.get("p1db_in_dbm") if metrics else None,
-            p1db_out=(metrics.get("p1db_in_dbm", 0.0) + metrics.get("gain_db", 0.0)) if metrics.get("p1db_in_dbm") is not None else None,
+            p1db_in=p1db_in,
+            p1db_out=p1db_out,
             ip3_in=metrics.get("iip3_dbm") if metrics else None,
             ip3_out=metrics.get("oip3_dbm") if metrics else None,
         )
