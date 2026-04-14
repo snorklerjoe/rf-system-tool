@@ -115,6 +115,15 @@ class PropertiesPanel(QWidget):
             self._add_freq_row("Cutoff (Hz)", b.cutoff_hz, self._on_cutoff_changed)
         elif isinstance(b, (PowerSplitter, PowerCombiner)):
             self._add_int_row("N ways", b.n_ways, 2, 16, self._on_nways_changed)
+        elif isinstance(b, Switch):
+            topology_value = "1xN" if str(getattr(b, "topology", "")).lower().startswith("1x") else "Nx1"
+            self._add_enum_row(
+                "Topology",
+                [("1xN", "1xN"), ("Nx1", "Nx1")],
+                topology_value,
+                self._on_switch_topology_changed,
+            )
+            self._add_int_row("N ways", b.n_ways, 2, 16, self._on_nways_changed)
         elif isinstance(b, Source):
             self._add_freq_row("Frequency (Hz)", b.frequency, self._on_src_freq_changed)
             self._add_float_row("Output Power (dBm)", b.output_power_dbm, -200, 100,
@@ -276,6 +285,16 @@ class PropertiesPanel(QWidget):
     def _on_nways_changed(self, v):
         if isinstance(self._block, (PowerSplitter, PowerCombiner)):
             self._block.set_n_ways(v)
+            self.block_ports_changed.emit(self._block.block_id)
+            self._emit_changed()
+        elif isinstance(self._block, Switch):
+            self._block.set_n_ways(v)
+            self.block_ports_changed.emit(self._block.block_id)
+            self._emit_changed()
+
+    def _on_switch_topology_changed(self, v):
+        if isinstance(self._block, Switch):
+            self._block.set_topology(v or "1xN")
             self.block_ports_changed.emit(self._block.block_id)
             self._emit_changed()
 

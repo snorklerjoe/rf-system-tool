@@ -730,7 +730,7 @@ class PowerCombiner(PowerSplitter):
 
 class Switch(RFBlock):
     """
-    RF switch with configurable topology (1x2 or 2x1).
+    RF switch with configurable topology (1xN or Nx1).
 
     The active port is toggled via toggle_state() or by setting
     active_port.
@@ -743,45 +743,90 @@ class Switch(RFBlock):
     def __init__(
         self,
         topology: str = "1x2",
+        n_ways: Optional[int] = None,
         active_port: int = 0,
         insertion_loss_db: float = 0.5,
         isolation_db: float = 40.0,
         **kwargs,
     ):
-        self.topology: str = topology     # "1x2" or "2x1"
-        self.active_port: int = active_port
+        self.topology: str = self._normalize_topology(topology)
+        inferred_ways = self._infer_n_ways(topology)
+        self.n_ways: int = max(2, n_ways if n_ways is not None else inferred_ways)
+        self.active_port: int = active_port % self.n_ways
         self.insertion_loss_db: float = insertion_loss_db
         self.isolation_db: float = isolation_db
-        kwargs.setdefault("label", f"SW {topology}")
+        label_topology = f"1x{self.n_ways}" if self.is_1xn else f"{self.n_ways}x1"
+        kwargs.setdefault("label", f"SW {label_topology}")
         kwargs.setdefault("color", "#DD4444")
         kwargs["gain_db"] = -insertion_loss_db
         kwargs.setdefault("nf_db", insertion_loss_db)
+        kwargs.setdefault("p1db_dbm", 25.0)
         super().__init__(**kwargs)
 
+    @staticmethod
+    def _infer_n_ways(topology: str) -> int:
+        topo = (topology or "").lower()
+        if "x" not in topo:
+            return 2
+        left, right = topo.split("x", 1)
+        if left == "1":
+            try:
+                return max(2, int(right))
+            except ValueError:
+                return 2
+        if right == "1":
+            try:
+                return max(2, int(left))
+            except ValueError:
+                return 2
+        return 2
+
+    @staticmethod
+    def _normalize_topology(topology: str) -> str:
+        topo = (topology or "").lower()
+        if topo.startswith("1x"):
+            return "1xN"
+        if topo.endswith("x1"):
+            return "Nx1"
+        return "1xN"
+
+    @property
+    def is_1xn(self) -> bool:
+        return self.topology == "1xN"
+
+    def set_topology(self, topology: str) -> None:
+        self.topology = self._normalize_topology(topology)
+        self.active_port %= self.n_ways
+        self._setup_ports()
+
+    def set_n_ways(self, n_ways: int) -> None:
+        self.n_ways = max(2, n_ways)
+        self.active_port %= self.n_ways
+        self._setup_ports()
+
     def _setup_ports(self) -> None:
-        if self.topology == "1x2":
+        if self.is_1xn:
             self._input_ports = [Port("IN", "input", 0)]
-            self._output_ports = [Port("OUT0", "output", 0), Port("OUT1", "output", 1)]
-        else:  # 2x1
-            self._input_ports = [Port("IN0", "input", 0), Port("IN1", "input", 1)]
+            self._output_ports = [Port(f"OUT{i}", "output", i) for i in range(self.n_ways)]
+        else:  # Nx1
+            self._input_ports = [Port(f"IN{i}", "input", i) for i in range(self.n_ways)]
             self._output_ports = [Port("OUT", "output", 0)]
 
     def toggle_state(self) -> None:
         """Toggle the active port."""
-        n_ports = 2  # only supporting 1x2 or 2x1
-        self.active_port = (self.active_port + 1) % n_ports
+        self.active_port = (self.active_port + 1) % self.n_ways
 
     def process(self, signal: Signal, port_name: str = "IN") -> Dict[str, Signal]:
-        if self.topology == "1x2":
+        if self.is_1xn:
             out_active = signal.apply_gain(-self.insertion_loss_db)
             out_isolated = signal.apply_gain(-self.isolation_db)
             outputs = {}
-            outputs["OUT0"] = out_active if self.active_port == 0 else out_isolated
-            outputs["OUT1"] = out_isolated if self.active_port == 0 else out_active
+            for i in range(self.n_ways):
+                outputs[f"OUT{i}"] = out_active if self.active_port == i else out_isolated
             return outputs
         else:
-            # 2x1: route active input to output
-            if port_name in (f"IN{self.active_port}", "IN0"):
+            # Nx1: route active input to output
+            if port_name == f"IN{self.active_port}":
                 out = signal.apply_gain(-self.insertion_loss_db)
             else:
                 out = signal.apply_gain(-self.isolation_db)
@@ -790,6 +835,7 @@ class Switch(RFBlock):
     def to_dict(self) -> dict:
         d = super().to_dict()
         d["topology"] = self.topology
+        d["n_ways"] = self.n_ways
         d["active_port"] = self.active_port
         d["insertion_loss_db"] = self.insertion_loss_db
         d["isolation_db"] = self.isolation_db
@@ -799,6 +845,7 @@ class Switch(RFBlock):
     def from_dict(cls, d: dict) -> "Switch":
         obj = cls(
             topology=d.get("topology", "1x2"),
+            n_ways=d.get("n_ways"),
             active_port=d.get("active_port", 0),
             insertion_loss_db=d.get("insertion_loss_db", 0.5),
             isolation_db=d.get("isolation_db", 40.0),

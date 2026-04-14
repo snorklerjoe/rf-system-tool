@@ -483,35 +483,33 @@ class SwitchItem(BlockItem):
         painter.drawRoundedRect(QRectF(0, 0, w, h), 4, 4)
         painter.setPen(QPen(Qt.white, 1.5))
         # Draw switch symbol
-        if self.block.topology == "1x2":
-            # Input on left, two outputs on right
+        n = max(2, getattr(self.block, "n_ways", 2))
+        active = getattr(self.block, "active_port", 0) % n
+        if self.block.topology.startswith("1x"):
+            # 1xN
             mid_y = h / 2
-            y0 = h * 0.3
-            y1 = h * 0.7
+            ys = [h * (i + 1) / (n + 1) for i in range(n)]
             painter.drawLine(QPointF(8, mid_y), QPointF(w * 0.35, mid_y))
-            # Active path (bold)
-            active_y = y0 if self.block.active_port == 0 else y1
-            inactive_y = y1 if self.block.active_port == 0 else y0
-            painter.setPen(QPen(Qt.white, 2.5))
-            painter.drawLine(QPointF(w * 0.35, mid_y), QPointF(w * 0.65, active_y))
-            painter.setPen(QPen(QColor(120, 120, 120), 1.0, Qt.DashLine))
-            painter.drawLine(QPointF(w * 0.35, mid_y), QPointF(w * 0.65, inactive_y))
-            painter.setPen(QPen(Qt.white, 1.5))
-            painter.drawLine(QPointF(w * 0.65, y0), QPointF(w - 8, y0))
-            painter.drawLine(QPointF(w * 0.65, y1), QPointF(w - 8, y1))
+            for i, y_out in enumerate(ys):
+                if i == active:
+                    painter.setPen(QPen(Qt.white, 2.5))
+                else:
+                    painter.setPen(QPen(QColor(120, 120, 120), 1.0, Qt.DashLine))
+                painter.drawLine(QPointF(w * 0.35, mid_y), QPointF(w * 0.65, y_out))
+                painter.setPen(QPen(Qt.white, 1.5))
+                painter.drawLine(QPointF(w * 0.65, y_out), QPointF(w - 8, y_out))
         else:
-            # 2x1
-            y0 = h * 0.3
-            y1 = h * 0.7
+            # Nx1
+            ys = [h * (i + 1) / (n + 1) for i in range(n)]
             mid_y = h / 2
-            painter.drawLine(QPointF(8, y0), QPointF(w * 0.35, y0))
-            painter.drawLine(QPointF(8, y1), QPointF(w * 0.35, y1))
-            active_y = y0 if self.block.active_port == 0 else y1
-            inactive_y = y1 if self.block.active_port == 0 else y0
-            painter.setPen(QPen(Qt.white, 2.5))
-            painter.drawLine(QPointF(w * 0.35, active_y), QPointF(w * 0.65, mid_y))
-            painter.setPen(QPen(QColor(120, 120, 120), 1.0, Qt.DashLine))
-            painter.drawLine(QPointF(w * 0.35, inactive_y), QPointF(w * 0.65, mid_y))
+            for i, y_in in enumerate(ys):
+                painter.setPen(QPen(Qt.white, 1.5))
+                painter.drawLine(QPointF(8, y_in), QPointF(w * 0.35, y_in))
+                if i == active:
+                    painter.setPen(QPen(Qt.white, 2.5))
+                else:
+                    painter.setPen(QPen(QColor(120, 120, 120), 1.0, Qt.DashLine))
+                painter.drawLine(QPointF(w * 0.35, y_in), QPointF(w * 0.65, mid_y))
             painter.setPen(QPen(Qt.white, 1.5))
             painter.drawLine(QPointF(w * 0.65, mid_y), QPointF(w - 8, mid_y))
 

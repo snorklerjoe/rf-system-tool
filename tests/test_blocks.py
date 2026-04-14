@@ -597,6 +597,16 @@ class TestSwitch:
         assert len(sw.input_ports) == 2
         assert len(sw.output_ports) == 1
 
+    def test_1xn_has_correct_ports(self):
+        sw = Switch(topology="1xN", n_ways=4)
+        assert len(sw.input_ports) == 1
+        assert len(sw.output_ports) == 4
+
+    def test_nx1_has_correct_ports(self):
+        sw = Switch(topology="Nx1", n_ways=5)
+        assert len(sw.input_ports) == 5
+        assert len(sw.output_ports) == 1
+
     def test_1x2_routes_to_active_port(self):
         sw = Switch(topology="1x2", active_port=0, insertion_loss_db=0.5, isolation_db=40.0)
         sig = make_signal(pwr=0.0)
@@ -619,10 +629,16 @@ class TestSwitch:
         sw.toggle_state()
         assert sw.active_port == 0
 
+    def test_toggle_wraps_around_for_arbitrary_n(self):
+        sw = Switch(topology="1xN", n_ways=4, active_port=3)
+        sw.toggle_state()
+        assert sw.active_port == 0
+
     def test_round_trip(self):
-        sw = Switch(topology="2x1", active_port=1, insertion_loss_db=1.0, isolation_db=35.0)
+        sw = Switch(topology="2x1", n_ways=4, active_port=1, insertion_loss_db=1.0, isolation_db=35.0)
         sw2 = Switch.from_dict(sw.to_dict())
-        assert sw2.topology == "2x1"
+        assert sw2.topology == "Nx1"
+        assert sw2.n_ways == 4
         assert sw2.active_port == 1
         assert sw2.insertion_loss_db == pytest.approx(1.0)
         assert sw2.isolation_db == pytest.approx(35.0)
@@ -630,6 +646,10 @@ class TestSwitch:
     def test_gain_is_negative_insertion_loss(self):
         sw = Switch(insertion_loss_db=0.5)
         assert sw.gain_db == pytest.approx(-0.5)
+
+    def test_default_switch_p1db_is_active(self):
+        sw = Switch()
+        assert sw.p1db_dbm is not None
 
 
 # ======================================================================= #
