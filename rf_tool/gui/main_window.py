@@ -513,6 +513,7 @@ class MainWindow(QMainWindow):
         if item:
             item.update_label()
             item.update()
+        self._refresh_metrics_block_lists()
         self._update_metrics_panel()
         self._status.showMessage("Property updated")
 
@@ -613,6 +614,7 @@ class MainWindow(QMainWindow):
         self._append_runtime_message("starting signal propagation.")
         signals = self._scene.propagate_signals(self._append_runtime_message)
         n_blocks = len(signals)
+        self._refresh_metrics_block_lists()
         self._update_metrics_panel()
         self._status.showMessage(f"Propagated signals through {n_blocks} blocks")
         self._append_runtime_message(f"propagation complete across {n_blocks} blocks.")
@@ -948,6 +950,8 @@ class MainWindow(QMainWindow):
         path_blocks = self._path_blocks(source_id, sink_id)
         effective = self._effective_blocks(path_blocks)
         metrics = compute_cascade_metrics(effective) if effective else {}
+        p1db_in = metrics.get("p1db_in_dbm") if metrics else None
+        p1db_out = metrics.get("p1db_out_dbm") if metrics else None
         source_item = self._scene.get_block_item(source_id) if source_id else None
         sink_level = None
         sink_snr = None
@@ -961,8 +965,10 @@ class MainWindow(QMainWindow):
             sink_level=sink_level,
             sink_snr=sink_snr,
             max_source=self._max_source_safe_power(source_id),
-            p1db=metrics.get("p1db_in_dbm") if metrics else None,
-            ip3=metrics.get("iip3_dbm") if metrics else None,
+            p1db_in=p1db_in,
+            p1db_out=p1db_out,
+            ip3_in=metrics.get("iip3_dbm") if metrics else None,
+            ip3_out=metrics.get("oip3_dbm") if metrics else None,
         )
 
     # ------------------------------------------------------------------ #
