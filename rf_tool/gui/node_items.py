@@ -483,7 +483,7 @@ class SwitchItem(BlockItem):
         painter.drawRoundedRect(QRectF(0, 0, w, h), 4, 4)
         painter.setPen(QPen(Qt.white, 1.5))
         # Draw switch symbol
-        n = max(2, getattr(self.block, "n_ways", 2))
+        n = getattr(self.block, "n_ways", 2)
         active = getattr(self.block, "active_port", 0) % n
         if self.block.topology.startswith("1x"):
             # 1xN
